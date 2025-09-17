@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats-load-tester
+  labels:
+    app: nats-load-tester
+    component: load-tester
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats-load-tester
+      component: load-tester
+  template:
+    metadata:
+      labels:
+        app: nats-load-tester
+        component: load-tester
+    spec:
+      containers:
+      - name: load-tester
+        image: ${DOCKER_REGISTRY}/nats-load-tester:${VERSION}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 9481
+          name: http
+          protocol: TCP
+        env:
+        - name: LOG_LEVEL
+          value: "info"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: config
+          mountPath: /config
+          readOnly: true
+        - name: data
+          mountPath: /var/lib/lt
+        args:
+        - "--config"
+        - "/config/config.json"
+        - "--port"
+        - "9481"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 15
+          periodSeconds: 20
+      volumes:
+      - name: config
+        configMap:
+          name: nats-load-tester-config
+          optional: true
+      - name: data
+        emptyDir: {}

@@ -1,0 +1,85 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-load-tester-config
+  labels:
+    app: nats-load-tester
+    component: load-tester
+data:
+  config.json: |-
+    {
+      "load_test_specs": [
+        {
+          "name": "100-streams-3-replicas-immediate",
+          "nats_url": "${NATS_URL}",
+          "nats_creds_file": "",
+          "use_jetstream": true,
+          "client_id_prefix": "load-tester",
+          "streams": [
+            {
+              "name_prefix": "load_stream",
+              "count": 100,
+              "replicas": 3,
+              "subjects": ["test.subject.{}"],
+              "messages_per_stream_per_second": 1000,
+              "message_size_bytes": 256
+            }
+          ],
+          "publishers": {
+            "count_per_stream": 1,
+            "stream_name_prefix": "load_stream",
+            "publish_rate_per_second": 1000,
+            "publish_pattern": "steady",
+            "publish_burst_size": 1,
+            "message_size_bytes": 1024,
+            "track_latency": true
+          },
+          "consumers": {
+            "stream_name_prefix": "load_stream",
+            "type": "push",
+            "count_per_stream": 1,
+            "durable_name_prefix": "load_consumer",
+            "ack_wait_seconds": 30,
+            "max_ack_pending": 1000,
+            "consume_delay_ms": 0,
+            "ack_policy": "explicit"
+          },
+          "behavior": {
+            "duration_seconds": 600,
+            "ramp_up_seconds": 30
+          },
+          "log_limits": {
+            "max_lines": 200,
+            "max_bytes": 65536
+          }
+        }
+      ],
+      "repeat_policy": {
+        "enabled": true,
+        "streams": {
+          "count_multiplier": 2,
+          "replicas_multiplier": 1,
+          "messages_per_stream_per_second_multiplier": 1.5
+        },
+        "behavior": {
+          "duration_multiplier": 1.2,
+          "ramp_up_multiplier": 1.2
+        },
+        "consumers": {
+          "ack_wait_multiplier": 1.5,
+          "max_ack_pending_multiplier": 1.5,
+          "consume_delay_multiplier": 1
+        },
+        "publishers": {
+          "count_per_stream_multiplier": 1,
+          "publish_rate_multiplier": 1,
+          "message_size_bytes_multiplier": 1
+        }
+      },
+      "storage": {
+        "type": "file",
+        "path": "/var/lib/lt/load_test_stats.log"
+      },
+      "stats_collection_interval_seconds": 5
+    }
