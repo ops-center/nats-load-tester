@@ -1,3 +1,5 @@
+## [WIP]: *⚠️ MOSTLY WRITTEN WITH CLAUDE OPUS 4 ⚠️*
+
 # NATS Load Tester
 
 ## Overview

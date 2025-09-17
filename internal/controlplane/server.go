@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"go.bytebuilders.dev/nats-load-tester/internal/config"
+	"go.bytebuilders.dev/nats-load-tester/internal/stats"
 )
 
 type Server interface {
@@ -18,6 +19,7 @@ type BaseServer struct {
 	currentConfig *config.Config
 	configChannel chan config.Config
 	configHash    string
+	collector     *stats.Collector
 }
 
 func NewBaseServer() *BaseServer {
@@ -54,4 +56,16 @@ func (b *BaseServer) GetConfig() *config.Config {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.currentConfig
+}
+
+func (b *BaseServer) SetCollector(collector *stats.Collector) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.collector = collector
+}
+
+func (b *BaseServer) GetCollector() *stats.Collector {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.collector
 }

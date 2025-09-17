@@ -29,6 +29,8 @@ type Publisher struct {
 	statsCollector StatsRecorder
 	logger         *zap.Logger
 	messageData    []byte
+	currentRate    int
+	targetRate     int
 }
 
 type StatsRecorder interface {
@@ -55,6 +57,8 @@ func NewPublisher(nc *nats.Conn, js nats.JetStreamContext, cfg PublisherConfig, 
 		statsCollector: stats,
 		logger:         logger,
 		messageData:    messageData,
+		currentRate:    1, // Start with low rate for ramp-up
+		targetRate:     cfg.PublishRate,
 	}
 }
 
@@ -65,7 +69,8 @@ func (p *Publisher) Start(ctx context.Context) error {
 		zap.Int("rate", p.config.PublishRate),
 	)
 
-	interval := time.Second / time.Duration(p.config.PublishRate)
+	// Start with current rate, will be updated during ramp-up
+	interval := time.Second / time.Duration(p.currentRate)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -73,15 +78,28 @@ func (p *Publisher) Start(ctx context.Context) error {
 	var burstTicker *time.Ticker
 
 	if p.config.PublishPattern == "burst" {
-		burstSize = p.config.PublishRate / 10
-		if burstSize < 1 {
-			burstSize = 1
-		}
+		burstSize = max(p.currentRate / 10, 1)
 		burstTicker = time.NewTicker(100 * time.Millisecond)
 		defer burstTicker.Stop()
 	}
 
+	// Track last rate update to adjust ticker
+	lastRate := p.currentRate
+
 	for {
+		// Check if rate changed and update ticker if needed
+		if p.currentRate != lastRate {
+			lastRate = p.currentRate
+			ticker.Stop()
+			interval = time.Second / time.Duration(p.currentRate)
+			ticker = time.NewTicker(interval)
+
+			// Also update burst size if using burst pattern
+			if p.config.PublishPattern == "burst" {
+				burstSize = max(p.currentRate / 10, 1)
+			}
+		}
+
 		select {
 		case <-ctx.Done():
 			p.logger.Info("Publisher stopping", zap.String("id", p.config.ID))
@@ -112,7 +130,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 		}
 
 		if p.config.PublishPattern == "random" {
-			randomDelay := time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(p.config.PublishRate)
+			randomDelay := time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(p.currentRate)
 			time.Sleep(randomDelay)
 			if err := p.publishMessage(); err != nil {
 				p.logger.Error("Failed to publish", zap.Error(err))
@@ -144,4 +162,30 @@ func (p *Publisher) publishMessage() error {
 
 	p.statsCollector.RecordPublish()
 	return nil
+}
+
+// SetRate updates the current publishing rate
+func (p *Publisher) SetRate(rate int) {
+	if rate < 1 {
+		rate = 1
+	}
+	if rate > p.targetRate {
+		rate = p.targetRate
+	}
+	p.currentRate = rate
+	p.logger.Debug("Publisher rate updated",
+		zap.String("id", p.config.ID),
+		zap.Int("new_rate", rate),
+		zap.Int("target_rate", p.targetRate),
+	)
+}
+
+// GetCurrentRate returns the current publishing rate
+func (p *Publisher) GetCurrentRate() int {
+	return p.currentRate
+}
+
+// GetTargetRate returns the target publishing rate
+func (p *Publisher) GetTargetRate() int {
+	return p.targetRate
 }

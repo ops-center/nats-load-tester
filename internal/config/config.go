@@ -8,24 +8,23 @@ import (
 )
 
 type Config struct {
-	Configurations []LoadTestConfig `json:"configurations"`
-	RepeatPolicy   RepeatPolicy     `json:"repeat_policy"`
-	Concurrency    Concurrency      `json:"concurrency"`
-	Storage        Storage          `json:"storage"`
+	Configurations                 []LoadTestConfig `json:"configurations"`
+	RepeatPolicy                   RepeatPolicy     `json:"repeat_policy"`
+	Storage                        Storage          `json:"storage"`
+	StatsCollectionIntervalSeconds int              `json:"stats_collection_interval_seconds"`
 }
 
 type LoadTestConfig struct {
-	Name                           string          `json:"name"`
-	NATSURL                        string          `json:"nats_url"`
-	NATSCredsFile                  string          `json:"nats_creds_file,omitempty"`
-	StatsCollectionIntervalSeconds int             `json:"stats_collection_interval_seconds"`
-	UseJetStream                   bool            `json:"use_jetstream"`
-	ClientIDPrefix                 string          `json:"client_id_prefix"`
-	Streams                        []StreamConfig  `json:"streams"`
-	Publishers                     PublisherConfig `json:"publishers"`
-	Consumers                      ConsumerConfig  `json:"consumers"`
-	Behavior                       BehaviorConfig  `json:"behavior"`
-	LogLimits                      LogLimits       `json:"log_limits"`
+	Name           string          `json:"name"`
+	NATSURL        string          `json:"nats_url"`
+	NATSCredsFile  string          `json:"nats_creds_file,omitempty"`
+	UseJetStream   bool            `json:"use_jetstream"`
+	ClientIDPrefix string          `json:"client_id_prefix"`
+	Streams        []StreamConfig  `json:"streams"`
+	Publishers     PublisherConfig `json:"publishers"`
+	Consumers      ConsumerConfig  `json:"consumers"`
+	Behavior       BehaviorConfig  `json:"behavior"`
+	LogLimits      LogLimits       `json:"log_limits"`
 }
 
 type StreamConfig struct {
@@ -99,10 +98,6 @@ type PublisherMultipliers struct {
 	MessageSizeBytesMultiplier float64 `json:"message_size_bytes_multiplier"`
 }
 
-type Concurrency struct {
-	AllowConcurrentConfigs bool `json:"allow_concurrent_configs"`
-}
-
 type Storage struct {
 	Type string `json:"type"`
 	Path string `json:"path"`
@@ -127,6 +122,10 @@ func (c *Config) Validate() error {
 		c.Storage.Path = "./load_test_stats.log"
 	}
 
+	if c.StatsCollectionIntervalSeconds <= 0 {
+		c.StatsCollectionIntervalSeconds = 5
+	}
+
 	return nil
 }
 
@@ -137,10 +136,6 @@ func (c *LoadTestConfig) Validate() error {
 
 	if c.NATSURL == "" {
 		return fmt.Errorf("nats_url required")
-	}
-
-	if c.StatsCollectionIntervalSeconds <= 0 {
-		c.StatsCollectionIntervalSeconds = 5
 	}
 
 	if c.ClientIDPrefix == "" {
@@ -261,8 +256,8 @@ func (b *BehaviorConfig) Validate() error {
 		b.DurationSeconds = 600
 	}
 
-	if b.RampUpSeconds < 0 {
-		b.RampUpSeconds = 0
+	if b.RampUpSeconds <= 0 {
+		b.RampUpSeconds = 1
 	}
 
 	if b.CheckpointIntervalSeconds <= 0 {
@@ -303,7 +298,7 @@ func (c *LoadTestConfig) ApplyMultipliers(rp RepeatPolicy) {
 	c.Publishers.MessageSizeBytes = int(float64(c.Publishers.MessageSizeBytes) * rp.Publishers.MessageSizeBytesMultiplier)
 }
 
-func (c *LoadTestConfig) StatsInterval() time.Duration {
+func (c *Config) StatsInterval() time.Duration {
 	return time.Duration(c.StatsCollectionIntervalSeconds) * time.Second
 }
 

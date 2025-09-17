@@ -111,9 +111,7 @@ func (c *Consumer) startPushConsumer(ctx context.Context) error {
 	}
 
 	c.subscription = sub
-
-	<-ctx.Done()
-	return c.cleanup()
+	return nil
 }
 
 func (c *Consumer) startPullConsumer(ctx context.Context) error {
@@ -157,9 +155,6 @@ func (c *Consumer) startCoreConsumer(ctx context.Context) error {
 	}
 
 	c.subscription = sub
-
-	<-ctx.Done()
-	return c.cleanup()
 }
 
 func (c *Consumer) handleMessage(msg *nats.Msg) {

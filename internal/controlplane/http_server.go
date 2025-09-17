@@ -39,6 +39,7 @@ func (h *HTTPServer) Start(ctx context.Context) error {
 	r.Post("/config", h.handleConfigUpdate)
 	r.Get("/config", h.handleConfigGet)
 	r.Get("/health", h.handleHealth)
+	r.Get("/stats/history", h.handleStatsHistory)
 
 	h.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", h.port),
@@ -127,5 +128,21 @@ func (h *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		http.Error(w, "Error encoding health status", http.StatusInternalServerError)
 		h.logger.Error("failed to encode response", zap.Error(err))
+	}
+}
+
+func (h *HTTPServer) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
+	collector := h.GetCollector()
+	if collector == nil {
+		http.Error(w, "Stats collector not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	history := collector.GetHistory()
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(history); err != nil {
+		http.Error(w, "Error encoding stats history", http.StatusInternalServerError)
+		h.logger.Error("failed to encode stats history response", zap.Error(err))
 	}
 }

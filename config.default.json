@@ -68,9 +68,6 @@
       "message_size_bytes_multiplier": 1
     }
   },
-  "concurrency": {
-    "allow_concurrent_configs": false
-  },
   "storage": {
     "type": "file",
     "path": "/var/lib/lt/load_test_stats.log"

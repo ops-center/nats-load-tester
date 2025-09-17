@@ -33,7 +33,7 @@ func main() {
 	}
 
 	rootCmd.PersistentFlags().StringVar(&configFile, "config", "", "Configuration file path")
-	rootCmd.PersistentFlags().IntVar(&port, "port", 8080, "HTTP server port")
+	rootCmd.PersistentFlags().IntVar(&port, "port", 9481, "HTTP server port")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 
 	if err := rootCmd.Execute(); err != nil {
@@ -57,8 +57,9 @@ func run(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 
+	//TODO: try to fetch from configmap first
 	var initialConfig *config.Config
 	if configFile != "" {
 		cfg, err := loadConfigFile(configFile)
@@ -79,7 +80,7 @@ func run(cmd *cobra.Command, args []string) error {
 	})
 
 	wg.Go(func() {
-		runLoadTestManager(ctx, httpServer.ConfigChannel(), initialConfig, logger)
+		runLoadTestManager(ctx, httpServer, initialConfig, logger)
 	})
 
 	<-sigCh
@@ -90,7 +91,8 @@ func run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runLoadTestManager(ctx context.Context, configCh <-chan config.Config, initialConfig *config.Config, logger *zap.Logger) {
+// TODO: refactor this ugly mess with proper dependency injection.
+func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer, initialConfig *config.Config, logger *zap.Logger) {
 	var currentEngine *engine.Engine
 	var statsCollector *stats.Collector
 	var storage stats.Storage
@@ -111,7 +113,7 @@ func runLoadTestManager(ctx context.Context, configCh <-chan config.Config, init
 	}()
 
 	if initialConfig != nil {
-		if err := processConfig(ctx, *initialConfig, &currentEngine, &statsCollector, &storage, &engineCancel, &statsCancelMu, logger); err != nil {
+		if err := processConfig(ctx, *initialConfig, &currentEngine, &statsCollector, &storage, &engineCancel, &statsCancelMu, httpServer, logger); err != nil {
 			logger.Error("failed to process initial config", zap.Error(err))
 		}
 	}
@@ -121,7 +123,7 @@ func runLoadTestManager(ctx context.Context, configCh <-chan config.Config, init
 		case <-ctx.Done():
 			return
 
-		case cfg := <-configCh:
+		case cfg := <-httpServer.ConfigChannel():
 			logger.Info("Received new configuration")
 
 			if currentEngine != nil && currentEngine.IsRunning() {
@@ -134,21 +136,23 @@ func runLoadTestManager(ctx context.Context, configCh <-chan config.Config, init
 				}
 			}
 
-			if err := processConfig(ctx, cfg, &currentEngine, &statsCollector, &storage, &engineCancel, &statsCancelMu, logger); err != nil {
+			if err := processConfig(ctx, cfg, &currentEngine, &statsCollector, &storage, &engineCancel, &statsCancelMu, httpServer, logger); err != nil {
 				logger.Error("failed to process config", zap.Error(err))
 			}
 		}
 	}
 }
 
-func processConfig(ctx context.Context, cfg config.Config, currentEngine **engine.Engine, statsCollector **stats.Collector, storage *stats.Storage, engineCancel *context.CancelFunc, statsCancelMu *sync.Mutex, logger *zap.Logger) error {
+func processConfig(ctx context.Context, cfg config.Config, currentEngine **engine.Engine, statsCollector **stats.Collector, storage *stats.Storage, engineCancel *context.CancelFunc, statsCancelMu *sync.Mutex, httpServer *controlplane.HTTPServer, logger *zap.Logger) error {
 	var err error
-	*storage, err = createStorage(cfg.Storage)
+	*storage, err = createStorage(cfg.Storage, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create storage: %w", err)
 	}
 
 	*statsCollector = stats.NewCollector(logger, *storage)
+	httpServer.SetCollector(*statsCollector)
+
 	*currentEngine = engine.NewEngine(logger, *statsCollector)
 
 	for i, testCfg := range cfg.Configurations {
@@ -164,7 +168,7 @@ func processConfig(ctx context.Context, cfg config.Config, currentEngine **engin
 		statsCancelMu.Lock()
 		go func() {
 			defer statsCancelMu.Unlock()
-			(*statsCollector).Start(statsCtx)
+			(*statsCollector).Start(statsCtx, cfg.StatsInterval())
 		}()
 		statsCancelMu.Unlock()
 
@@ -210,7 +214,7 @@ func processConfig(ctx context.Context, cfg config.Config, currentEngine **engin
 			statsCancelMu.Lock()
 			go func() {
 				defer statsCancelMu.Unlock()
-				(*statsCollector).Start(statsCtx)
+				(*statsCollector).Start(statsCtx, cfg.StatsInterval())
 			}()
 			statsCancelMu.Unlock()
 
@@ -247,10 +251,10 @@ func processConfig(ctx context.Context, cfg config.Config, currentEngine **engin
 	return nil
 }
 
-func createStorage(cfg config.Storage) (stats.Storage, error) {
+func createStorage(cfg config.Storage, logger *zap.Logger) (stats.Storage, error) {
 	switch cfg.Type {
 	case "badger":
-		return stats.NewBadgerStorage(cfg.Path)
+		return stats.NewBadgerStorage(cfg.Path, logger)
 	case "file", "":
 		if cfg.Path == "" {
 			cfg.Path = "./load_test_stats.log"

@@ -12,6 +12,6 @@ spec:
     component: load-tester
   ports:
   - name: http
-    port: 8080
+    port: 9481
     targetPort: http
     protocol: TCP

@@ -50,7 +50,7 @@ logs:
 
 .PHONY: port-forward
 port-forward:
-	kubectl port-forward service/nats-load-tester 8080:8080 -n $(K8S_NAMESPACE)
+	kubectl port-forward service/nats-load-tester 9481:9481 -n $(K8S_NAMESPACE)
 
 .PHONY: test-local
 test-local:

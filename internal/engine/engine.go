@@ -51,7 +51,9 @@ func (e *Engine) Start(ctx context.Context, cfg config.LoadTestConfig) error {
 	}
 
 	e.currentConfig = &cfg
-	e.statsCollector.SetConfig(cfg)
+	if err := e.statsCollector.SetConfig(cfg); err != nil {
+		return fmt.Errorf("failed to set stats collector config: %w", err)
+	}
 
 	engineCtx, cancel := context.WithCancel(ctx)
 	e.cancel = cancel
@@ -78,7 +80,7 @@ func (e *Engine) Start(ctx context.Context, cfg config.LoadTestConfig) error {
 	}
 
 	e.eg.Go(func() error {
-		return e.runTest(engineCtx, cfg)
+		return e.startRampUp(engineCtx, cfg)
 	})
 
 	return nil
@@ -265,9 +267,14 @@ func (e *Engine) startConsumers(ctx context.Context, cfg config.LoadTestConfig) 
 				consumer := cons
 
 				e.eg.Go(func() error {
+					//TODO: (MAJOR ISSUE) this isn't proper, will leak memory and break upon a single consumer failure
+					defer func() {
+						<-ctx.Done()
+						consumer.cleanup()
+					}()
 					if err := consumer.Start(ctx); err != nil {
-						e.logger.Error("Consumer failed", zap.String("id", consID), zap.Error(err))
 						e.statsCollector.RecordError(err)
+						e.logger.Error("Consumer failed", zap.String("id", consID), zap.Error(err))
 						return fmt.Errorf("consumer %s failed: %w", consID, err)
 					}
 					return nil
@@ -279,39 +286,83 @@ func (e *Engine) startConsumers(ctx context.Context, cfg config.LoadTestConfig) 
 	return nil
 }
 
-func (e *Engine) runTest(ctx context.Context, cfg config.LoadTestConfig) error {
-	testTimer := time.NewTimer(cfg.Duration())
-	defer testTimer.Stop()
+func (e *Engine) startRampUp(ctx context.Context, cfg config.LoadTestConfig) error {
+	rampUpDuration := cfg.RampUpDuration()
+	rampUpStart := time.Now()
 
-	checkpointTicker := time.NewTicker(cfg.CheckpointInterval())
-	defer checkpointTicker.Stop()
-
-	rampUpComplete := false
-	rampUpTimer := time.NewTimer(cfg.RampUpDuration())
-	if cfg.RampUpDuration() == 0 {
-		rampUpComplete = true
-		rampUpTimer.Stop()
+	if rampUpDuration == 0 {
+		e.logger.Info("No ramp-up configured, starting at full rate")
+		e.setAllPublishersToFullRate()
+		e.statsCollector.SetRampUpStatus(false, time.Time{}, 0, 0, 0)
+		return nil
 	}
+
+	rampUpTimer := time.NewTimer(rampUpDuration)
+	rampUpTicker := time.NewTicker(time.Second)
+	e.logger.Info("Starting ramp-up", zap.Duration("duration", rampUpDuration))
+
+	targetRate := 0
+	if len(e.publishers) > 0 {
+		targetRate = e.publishers[0].GetTargetRate()
+	}
+	e.statsCollector.SetRampUpStatus(true, rampUpStart, rampUpDuration, 1, targetRate)
 
 	for {
 		select {
 		case <-ctx.Done():
+			rampUpTimer.Stop()
+			rampUpTicker.Stop()
 			return ctx.Err()
 
-		case <-testTimer.C:
-			e.logger.Info("Test duration complete")
-			return nil
-
 		case <-rampUpTimer.C:
-			if !rampUpComplete {
-				e.logger.Info("Ramp-up complete")
-				rampUpComplete = true
-				rampUpTimer.Stop()
-			}
+			e.logger.Info("Ramp-up complete")
+			e.setAllPublishersToFullRate()
+			e.statsCollector.SetRampUpStatus(false, time.Time{}, 0, 0, 0)
+			rampUpTimer.Stop()
+			rampUpTicker.Stop()
 
-		case <-checkpointTicker.C:
-			e.logger.Debug("Checkpoint")
+		case <-rampUpTicker.C:
+			elapsed := time.Since(rampUpStart)
+			progress := min(float64(elapsed)/float64(rampUpDuration), 1.0)
+			e.updatePublisherRates(progress)
+
+			currentRate := 1
+			targetRate := 0
+			if len(e.publishers) > 0 {
+				currentRate = e.publishers[0].GetCurrentRate()
+				targetRate = e.publishers[0].GetTargetRate()
+			}
+			e.statsCollector.SetRampUpStatus(true, rampUpStart, rampUpDuration, currentRate, targetRate)
+
 		}
+	}
+}
+
+// setAllPublishersToFullRate sets all publishers to their target rate
+func (e *Engine) setAllPublishersToFullRate() {
+	for _, pub := range e.publishers {
+		pub.SetRate(pub.GetTargetRate())
+	}
+	e.logger.Info("All publishers set to full rate", zap.Int("publishers", len(e.publishers)))
+}
+
+// updatePublisherRates updates all publisher rates based on ramp-up progress
+func (e *Engine) updatePublisherRates(progress float64) {
+	for _, pub := range e.publishers {
+		targetRate := pub.GetTargetRate()
+		// Start at 1 msg/sec and gradually increase to target rate
+		currentRate := min(max(int(1+(float64(targetRate-1)*progress)), 1), targetRate)
+		pub.SetRate(currentRate)
+	}
+
+	// Log progress periodically
+	if len(e.publishers) > 0 {
+		sampleRate := int(1 + (float64(e.publishers[0].GetTargetRate()-1) * progress))
+		e.logger.Debug("Ramp-up progress",
+			zap.Float64("progress", progress*100),
+			zap.Int("current_rate", sampleRate),
+			zap.Int("target_rate", e.publishers[0].GetTargetRate()),
+		)
 	}
 }
 

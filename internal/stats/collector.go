@@ -3,7 +3,7 @@ package stats
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +29,12 @@ type Collector struct {
 	lastStatsTime time.Time
 	statsHistory  []Stats
 	maxHistory    int
+	// Ramp-up tracking
+	rampUpActive   bool
+	rampUpStart    time.Time
+	rampUpDuration time.Duration
+	rampUpCurrent  int
+	rampUpTarget   int
 }
 
 type Stats struct {
@@ -42,6 +48,15 @@ type Stats struct {
 	PendingMessages int64
 	Latency         LatencyStats
 	Errors          []error
+	RampUp          RampUpStats
+}
+
+type RampUpStats struct {
+	IsActive      bool    `json:"is_active"`
+	Progress      float64 `json:"progress"`       // 0.0 to 1.0
+	CurrentRate   int     `json:"current_rate"`   // Current publish rate
+	TargetRate    int     `json:"target_rate"`    // Target publish rate
+	TimeRemaining string  `json:"time_remaining"` // Formatted duration remaining
 }
 
 type LatencyStats struct {
@@ -65,16 +80,14 @@ func NewCollector(logger *zap.Logger, storage Storage) *Collector {
 	}
 }
 
-func (c *Collector) SetConfig(cfg config.LoadTestConfig) {
+func (c *Collector) SetConfig(cfg config.LoadTestConfig) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.config = cfg
 	c.Reset()
 
-	if err := c.storage.WriteConfigStart(cfg); err != nil {
-		c.logger.Error("Failed to write config start", zap.Error(err))
-	}
+	return nil
 }
 
 func (c *Collector) Reset() {
@@ -159,6 +172,9 @@ func (c *Collector) CollectStats() Stats {
 	c.errors = c.errors[:0]
 	c.errorsMu.Unlock()
 
+	// Add ramp-up status
+	stats.RampUp = c.getRampUpStats(now)
+
 	c.lastStatsTime = now
 
 	c.mu.Lock()
@@ -176,9 +192,7 @@ func (c *Collector) calculateLatencyStats(latencies []time.Duration) LatencyStat
 		return LatencyStats{}
 	}
 
-	sort.Slice(latencies, func(i, j int) bool {
-		return latencies[i] < latencies[j]
-	})
+	slices.Sort(latencies)
 
 	stats := LatencyStats{
 		Min:   latencies[0],
@@ -201,8 +215,8 @@ func (c *Collector) calculateLatencyStats(latencies []time.Duration) LatencyStat
 	return stats
 }
 
-func (c *Collector) Start(ctx context.Context) {
-	ticker := time.NewTicker(c.config.StatsInterval())
+func (c *Collector) Start(ctx context.Context, statsInterval time.Duration) {
+	ticker := time.NewTicker(statsInterval)
 	defer ticker.Stop()
 
 	for {
@@ -211,8 +225,11 @@ func (c *Collector) Start(ctx context.Context) {
 			return
 		case <-ticker.C:
 			stats := c.CollectStats()
-			if err := c.storage.WriteStats(stats); err != nil {
-				c.logger.Error("Failed to write stats", zap.Error(err))
+			// Store stats automatically on each collection
+			if c.storage != nil {
+				if err := c.storage.WriteStats(stats); err != nil {
+					c.logger.Error("Failed to store stats", zap.Error(err))
+				}
 			}
 		}
 	}
@@ -236,8 +253,50 @@ func (c *Collector) WriteFailure(err error) {
 		Errors:    []error{err},
 	}
 
-	if err := c.storage.WriteFailure(failureStats); err != nil {
-		c.logger.Error("Failed to write failure stats", zap.Error(err))
+	c.statsHistory = append(c.statsHistory, failureStats)
+	if len(c.statsHistory) > c.maxHistory {
+		c.statsHistory = c.statsHistory[1:]
+	}
+}
+
+// SetRampUpStatus sets the current ramp-up status
+func (c *Collector) SetRampUpStatus(active bool, start time.Time, duration time.Duration, current, target int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.rampUpActive = active
+	c.rampUpStart = start
+	c.rampUpDuration = duration
+	c.rampUpCurrent = current
+	c.rampUpTarget = target
+}
+
+// getRampUpStats calculates current ramp-up statistics
+func (c *Collector) getRampUpStats(now time.Time) RampUpStats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if !c.rampUpActive {
+		return RampUpStats{IsActive: false}
+	}
+
+	elapsed := now.Sub(c.rampUpStart)
+	progress := float64(elapsed) / float64(c.rampUpDuration)
+	if progress > 1.0 {
+		progress = 1.0
+	}
+
+	timeRemaining := c.rampUpDuration - elapsed
+	if timeRemaining < 0 {
+		timeRemaining = 0
+	}
+
+	return RampUpStats{
+		IsActive:      true,
+		Progress:      progress,
+		CurrentRate:   c.rampUpCurrent,
+		TargetRate:    c.rampUpTarget,
+		TimeRemaining: timeRemaining.Truncate(time.Second).String(),
 	}
 }
 
