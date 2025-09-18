@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -13,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.bytebuilders.dev/nats-load-tester/internal/config"
 	"go.bytebuilders.dev/nats-load-tester/internal/controlplane"
-	"go.bytebuilders.dev/nats-load-tester/internal/engine"
+	loadtest_engine "go.bytebuilders.dev/nats-load-tester/internal/engine"
 	"go.bytebuilders.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
 )
@@ -59,21 +58,12 @@ func run(cmd *cobra.Command, args []string) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// TODO: try to fetch from configmap first
-	var initialConfig *config.Config
-	if configFile != "" {
-		cfg, err := loadConfigFile(configFile)
-		if err != nil {
-			return fmt.Errorf("failed to load config file: %w", err)
-		}
-		initialConfig = cfg
-	}
-
 	configChannel := make(chan *config.Config)
+	// TODO: Check for existing default config here and send to channel
+
 	httpServer := controlplane.NewHTTPServer(port, logger, configChannel)
 
 	var wg sync.WaitGroup
-
 	wg.Go(func() {
 		if err := httpServer.Start(ctx); err != nil {
 			logger.Error("http server failed", zap.Error(err))
@@ -81,7 +71,7 @@ func run(cmd *cobra.Command, args []string) error {
 	})
 
 	wg.Go(func() {
-		runLoadTestManager(ctx, httpServer, initialConfig, logger, configChannel)
+		runLoadTestManager(ctx, httpServer, logger, configChannel)
 	})
 
 	<-sigCh
@@ -92,31 +82,7 @@ func run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// TODO: refactor this ugly mess with proper dependency injection.
-func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer, initialConfig *config.Config, logger *zap.Logger, configChannel <-chan *config.Config) {
-	var currentEngine *engine.Engine
-	var statsCollector *stats.Collector
-	var storage stats.Storage
-
-	defer func() {
-		if currentEngine != nil {
-			if err := currentEngine.Stop(); err != nil {
-				logger.Error("engine wait failed", zap.Error(err))
-			}
-		}
-		if storage != nil {
-			if err := storage.Close(); err != nil {
-				logger.Error("failed to close storage", zap.Error(err))
-			}
-		}
-	}()
-
-	if initialConfig != nil {
-		if err := processConfig(ctx, initialConfig, &currentEngine, &statsCollector, &storage, httpServer, logger); err != nil {
-			logger.Error("failed to process initial config", zap.Error(err))
-		}
-	}
-
+func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer, logger *zap.Logger, configChannel <-chan *config.Config) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -125,16 +91,32 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 		case cfg := <-configChannel:
 			logger.Info("Received new configuration")
 
-			if currentEngine != nil && currentEngine.IsRunning() {
-				logger.Info("Stopping current test")
-				if err := currentEngine.Stop(); err != nil {
+			storage, err := createStorage(cfg.Storage, logger)
+			if err != nil {
+				logger.Error("failed to create storage", zap.Error(err))
+				continue
+			}
+
+			statsCollector := stats.NewCollector(logger, storage)
+			engine := loadtest_engine.NewEngine(logger, statsCollector)
+			httpServer.SetCollector(statsCollector)
+
+			if err := processConfig(ctx, cfg, engine, logger); err != nil {
+				logger.Error("failed to process config", zap.Error(err))
+			}
+
+			if engine != nil {
+				if err := engine.Stop(); err != nil {
 					logger.Error("engine wait failed", zap.Error(err))
 				}
 			}
 
-			if err := processConfig(ctx, cfg, &currentEngine, &statsCollector, &storage, httpServer, logger); err != nil {
-				logger.Error("failed to process config", zap.Error(err))
+			if storage != nil {
+				if err = storage.Close(); err != nil {
+					logger.Error("failed to close storage", zap.Error(err))
+				}
 			}
+
 		}
 	}
 }
@@ -142,22 +124,9 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 func processConfig(
 	ctx context.Context,
 	cfg *config.Config,
-	currentEngine **engine.Engine,
-	statsCollector **stats.Collector,
-	storage *stats.Storage,
-	httpServer *controlplane.HTTPServer,
+	engine *loadtest_engine.Engine,
 	logger *zap.Logger,
 ) error {
-	var err error
-	*storage, err = createStorage(cfg.Storage, logger)
-	if err != nil {
-		return fmt.Errorf("failed to create storage: %w", err)
-	}
-
-	*statsCollector = stats.NewCollector(logger, *storage)
-	httpServer.SetCollector(*statsCollector)
-	*currentEngine = engine.NewEngine(logger, *statsCollector)
-
 	for i, loadTestSpec := range cfg.LoadTestSpecs {
 		logger.Info("Starting test configuration",
 			zap.Int("index", i),
@@ -166,7 +135,7 @@ func processConfig(
 
 		engineCtx, cancel := context.WithCancel(ctx)
 
-		if err := (*currentEngine).Start(engineCtx, loadTestSpec, cfg.StatsInterval()); err != nil {
+		if err := (*engine).Start(engineCtx, loadTestSpec, cfg.StatsInterval()); err != nil {
 			cancel()
 			return fmt.Errorf("failed to start engine: %w", err)
 		}
@@ -176,11 +145,11 @@ func processConfig(
 			cancel()
 			return nil
 		case <-time.After(loadTestSpec.Duration()):
-			logger.Info("Test configuration completed", zap.String("name", loadTestSpec.Name))
+			logger.Info("Test spec completed", zap.String("name", loadTestSpec.Name))
 		}
 		cancel()
 
-		if err := (*currentEngine).Stop(); err != nil {
+		if err := engine.Stop(); err != nil {
 			logger.Error("engine wait failed", zap.Error(err))
 		}
 		time.Sleep(5 * time.Second)
@@ -200,9 +169,9 @@ func processConfig(
 
 			engineCtx, cancel := context.WithCancel(ctx)
 
-			if err := (*currentEngine).Start(engineCtx, lastLoadTest, cfg.StatsInterval()); err != nil {
+			if err := engine.Start(engineCtx, lastLoadTest, cfg.StatsInterval()); err != nil {
 				logger.Error("repeat configuration failed", zap.Error(err))
-				(*statsCollector).WriteFailure(err)
+				// (*statsCollector).WriteFailure(err)
 				cancel()
 				break
 			}
@@ -219,7 +188,7 @@ func processConfig(
 			}
 			cancel()
 
-			if err := (*currentEngine).Stop(); err != nil {
+			if err := engine.Stop(); err != nil {
 				logger.Error("engine wait failed", zap.Error(err))
 			}
 			cancel()
@@ -245,24 +214,6 @@ func createStorage(cfg config.Storage, logger *zap.Logger) (stats.Storage, error
 	default:
 		return nil, fmt.Errorf("unknown storage type: %s", cfg.Type)
 	}
-}
-
-func loadConfigFile(path string) (*config.Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var cfg config.Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-
-	return &cfg, nil
 }
 
 func setupLogger(level string) (*zap.Logger, error) {
