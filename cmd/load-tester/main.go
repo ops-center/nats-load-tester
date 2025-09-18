@@ -57,9 +57,9 @@ func run(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	//TODO: try to fetch from configmap first
+	// TODO: try to fetch from configmap first
 	var initialConfig *config.Config
 	if configFile != "" {
 		cfg, err := loadConfigFile(configFile)

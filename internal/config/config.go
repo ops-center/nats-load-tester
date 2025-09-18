@@ -310,6 +310,7 @@ func (c *LoadTestConfig) RampUpDuration() time.Duration {
 	return time.Duration(c.Behavior.RampUpSeconds) * time.Second
 }
 
+// TODO: use this
 func (c *LoadTestConfig) CheckpointInterval() time.Duration {
 	return time.Duration(c.Behavior.CheckpointIntervalSeconds) * time.Second
 }

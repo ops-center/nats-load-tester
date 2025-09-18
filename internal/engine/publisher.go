@@ -78,7 +78,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 	var burstTicker *time.Ticker
 
 	if p.config.PublishPattern == "burst" {
-		burstSize = max(p.currentRate / 10, 1)
+		burstSize = max(p.currentRate/10, 1)
 		burstTicker = time.NewTicker(100 * time.Millisecond)
 		defer burstTicker.Stop()
 	}
@@ -96,7 +96,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 
 			// Also update burst size if using burst pattern
 			if p.config.PublishPattern == "burst" {
-				burstSize = max(p.currentRate / 10, 1)
+				burstSize = max(p.currentRate/10, 1)
 			}
 		}
 

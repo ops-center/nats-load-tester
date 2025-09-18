@@ -59,7 +59,8 @@ func (c *Consumer) Start(ctx context.Context) error {
 	if c.config.UseJetStream && c.js != nil {
 		return c.startJetStreamConsumer(ctx)
 	}
-	return c.startCoreConsumer(ctx)
+
+	return c.startCoreConsumer()
 }
 
 func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
@@ -92,10 +93,10 @@ func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
 	if c.config.Type == "pull" {
 		return c.startPullConsumer(ctx)
 	}
-	return c.startPushConsumer(ctx)
+	return c.startPushConsumer()
 }
 
-func (c *Consumer) startPushConsumer(ctx context.Context) error {
+func (c *Consumer) startPushConsumer() error {
 	msgHandler := func(msg *nats.Msg) {
 		c.handleMessage(msg)
 	}
@@ -144,7 +145,7 @@ func (c *Consumer) startPullConsumer(ctx context.Context) error {
 	}
 }
 
-func (c *Consumer) startCoreConsumer(ctx context.Context) error {
+func (c *Consumer) startCoreConsumer() error {
 	msgHandler := func(msg *nats.Msg) {
 		c.handleMessage(msg)
 	}
@@ -155,6 +156,7 @@ func (c *Consumer) startCoreConsumer(ctx context.Context) error {
 	}
 
 	c.subscription = sub
+	return nil
 }
 
 func (c *Consumer) handleMessage(msg *nats.Msg) {

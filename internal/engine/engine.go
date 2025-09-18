@@ -69,10 +69,7 @@ func (e *Engine) Start(ctx context.Context, cfg config.LoadTestConfig) error {
 		}
 	}
 
-	if err := e.startPublishers(engineCtx, cfg); err != nil {
-		e.cleanup()
-		return fmt.Errorf("failed to start publishers: %w", err)
-	}
+	e.startPublishers(engineCtx, cfg)
 
 	if err := e.startConsumers(engineCtx, cfg); err != nil {
 		e.cleanup()
@@ -199,8 +196,7 @@ func (e *Engine) setupStreams(cfg config.LoadTestConfig) error {
 	return nil
 }
 
-// TODO: Fix the error handling
-func (e *Engine) startPublishers(ctx context.Context, cfg config.LoadTestConfig) error {
+func (e *Engine) startPublishers(ctx context.Context, cfg config.LoadTestConfig) {
 	for _, streamCfg := range cfg.Streams {
 		for i := 0; i < streamCfg.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", streamCfg.NamePrefix, i+1)
@@ -220,7 +216,6 @@ func (e *Engine) startPublishers(ctx context.Context, cfg config.LoadTestConfig)
 				pub := NewPublisher(e.nc, e.js, pubCfg, e.statsCollector, e.logger)
 				e.publishers = append(e.publishers, pub)
 
-				// Capture variables for closure
 				pubID := pub.config.ID
 				publisher := pub
 
@@ -235,12 +230,11 @@ func (e *Engine) startPublishers(ctx context.Context, cfg config.LoadTestConfig)
 			}
 		}
 	}
-
-	return nil
 }
 
-// TODO: Fix the error handling
 func (e *Engine) startConsumers(ctx context.Context, cfg config.LoadTestConfig) error {
+	consumerStartErrGroup := &errgroup.Group{}
+
 	for _, streamCfg := range cfg.Streams {
 		for i := 0; i < streamCfg.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", streamCfg.NamePrefix, i+1)
@@ -262,25 +256,32 @@ func (e *Engine) startConsumers(ctx context.Context, cfg config.LoadTestConfig) 
 				cons := NewConsumer(e.nc, e.js, consCfg, e.statsCollector, e.logger)
 				e.consumers = append(e.consumers, cons)
 
-				// Capture variables for closure
 				consID := cons.config.ID
 				consumer := cons
 
-				e.eg.Go(func() error {
-					//TODO: (MAJOR ISSUE) this isn't proper, will leak memory and break upon a single consumer failure
-					defer func() {
-						<-ctx.Done()
-						consumer.cleanup()
-					}()
+				consumerStartErrGroup.Go(func() error {
 					if err := consumer.Start(ctx); err != nil {
 						e.statsCollector.RecordError(err)
-						e.logger.Error("Consumer failed", zap.String("id", consID), zap.Error(err))
+						e.logger.Error("consumer failed", zap.String("id", consID), zap.Error(err))
 						return fmt.Errorf("consumer %s failed: %w", consID, err)
 					}
+					e.eg.Go(func() error {
+						<-ctx.Done()
+						if consumerErr := consumer.cleanup(); consumerErr != nil {
+							e.logger.Error("consumer cleanup failed", zap.String("id", consID), zap.Error(consumerErr))
+							return fmt.Errorf("consumer %s cleanup failed: %w", consID, consumerErr)
+						}
+						return nil
+					})
 					return nil
 				})
 			}
 		}
+	}
+
+	if err := consumerStartErrGroup.Wait(); err != nil {
+		e.logger.Error("one or more consumers failed to start", zap.Error(err))
+		return fmt.Errorf("one or more consumers failed to start: %w", err)
 	}
 
 	return nil
@@ -367,6 +368,9 @@ func (e *Engine) updatePublisherRates(progress float64) {
 }
 
 func (e *Engine) cleanup() {
+	if e.cancel != nil {
+		e.cancel()
+	}
 	if e.nc != nil && e.nc.IsConnected() {
 		e.nc.Close()
 	}

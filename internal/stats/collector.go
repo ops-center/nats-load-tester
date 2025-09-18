@@ -128,9 +128,24 @@ func (c *Collector) recordError(err error) {
 	c.errorsMu.Lock()
 	defer c.errorsMu.Unlock()
 
-	if len(c.errors) < c.config.LogLimits.MaxLines {
-		c.errors = append(c.errors, err)
+	if len(c.errors) >= c.config.LogLimits.MaxLines {
+		c.errors = c.errors[1:]
 	}
+
+	currentSize := 0
+	for _, e := range c.errors {
+		currentSize += len(e.Error())
+	}
+
+	newErrorSize := len(err.Error())
+	if currentSize+newErrorSize > c.config.LogLimits.MaxBytes {
+		for currentSize+newErrorSize > c.config.LogLimits.MaxBytes && len(c.errors) > 0 {
+			currentSize -= len(c.errors[0].Error())
+			c.errors = c.errors[1:]
+		}
+	}
+
+	c.errors = append(c.errors, err)
 }
 
 func (c *Collector) RecordLatency(latency time.Duration) {
@@ -172,7 +187,6 @@ func (c *Collector) CollectStats() Stats {
 	c.errors = c.errors[:0]
 	c.errorsMu.Unlock()
 
-	// Add ramp-up status
 	stats.RampUp = c.getRampUpStats(now)
 
 	c.lastStatsTime = now
@@ -286,10 +300,7 @@ func (c *Collector) getRampUpStats(now time.Time) RampUpStats {
 		progress = 1.0
 	}
 
-	timeRemaining := c.rampUpDuration - elapsed
-	if timeRemaining < 0 {
-		timeRemaining = 0
-	}
+	timeRemaining := max(c.rampUpDuration-elapsed, 0)
 
 	return RampUpStats{
 		IsActive:      true,
