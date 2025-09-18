@@ -36,10 +36,11 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector) *Engine {
 	}
 }
 
-func (e *Engine) Start(ctx context.Context, cfg config.LoadTestSpec) error {
+func (e *Engine) Start(ctx context.Context, cfg config.LoadTestSpec, statsInterval time.Duration) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	e.statsCollector.Start(ctx, statsInterval)
 	if e.running {
 		return fmt.Errorf("engine already running")
 	}

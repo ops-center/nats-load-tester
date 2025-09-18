@@ -97,8 +97,6 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 	var currentEngine *engine.Engine
 	var statsCollector *stats.Collector
 	var storage stats.Storage
-	var engineCancel context.CancelFunc
-	var statsCancelMu sync.Mutex
 
 	defer func() {
 		if currentEngine != nil {
@@ -114,7 +112,7 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 	}()
 
 	if initialConfig != nil {
-		if err := processConfig(ctx, initialConfig, &currentEngine, &statsCollector, &storage, &engineCancel, &statsCancelMu, httpServer, logger); err != nil {
+		if err := processConfig(ctx, initialConfig, &currentEngine, &statsCollector, &storage, httpServer, logger); err != nil {
 			logger.Error("failed to process initial config", zap.Error(err))
 		}
 	}
@@ -132,12 +130,9 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 				if err := currentEngine.Stop(); err != nil {
 					logger.Error("engine wait failed", zap.Error(err))
 				}
-				if engineCancel != nil {
-					engineCancel()
-				}
 			}
 
-			if err := processConfig(ctx, cfg, &currentEngine, &statsCollector, &storage, &engineCancel, &statsCancelMu, httpServer, logger); err != nil {
+			if err := processConfig(ctx, cfg, &currentEngine, &statsCollector, &storage, httpServer, logger); err != nil {
 				logger.Error("failed to process config", zap.Error(err))
 			}
 		}
@@ -150,8 +145,6 @@ func processConfig(
 	currentEngine **engine.Engine,
 	statsCollector **stats.Collector,
 	storage *stats.Storage,
-	engineCancel *context.CancelFunc,
-	statsCancelMu *sync.Mutex,
 	httpServer *controlplane.HTTPServer,
 	logger *zap.Logger,
 ) error {
@@ -163,7 +156,6 @@ func processConfig(
 
 	*statsCollector = stats.NewCollector(logger, *storage)
 	httpServer.SetCollector(*statsCollector)
-
 	*currentEngine = engine.NewEngine(logger, *statsCollector)
 
 	for i, loadTestSpec := range cfg.LoadTestSpecs {
@@ -173,36 +165,24 @@ func processConfig(
 		)
 
 		engineCtx, cancel := context.WithCancel(ctx)
-		*engineCancel = cancel
 
-		statsCtx, statsCancel := context.WithCancel(ctx)
-		statsCancelMu.Lock()
-		go func() {
-			defer statsCancelMu.Unlock()
-			(*statsCollector).Start(statsCtx, cfg.StatsInterval())
-		}()
-		statsCancelMu.Unlock()
-
-		if err := (*currentEngine).Start(engineCtx, loadTestSpec); err != nil {
+		if err := (*currentEngine).Start(engineCtx, loadTestSpec, cfg.StatsInterval()); err != nil {
 			cancel()
-			statsCancel()
 			return fmt.Errorf("failed to start engine: %w", err)
 		}
 
 		select {
 		case <-ctx.Done():
 			cancel()
-			statsCancel()
 			return nil
 		case <-time.After(loadTestSpec.Duration()):
 			logger.Info("Test configuration completed", zap.String("name", loadTestSpec.Name))
 		}
+		cancel()
 
 		if err := (*currentEngine).Stop(); err != nil {
 			logger.Error("engine wait failed", zap.Error(err))
 		}
-		cancel()
-		statsCancel()
 		time.Sleep(5 * time.Second)
 	}
 
@@ -219,28 +199,17 @@ func processConfig(
 			lastLoadTest.ApplyMultipliers(cfg.RepeatPolicy)
 
 			engineCtx, cancel := context.WithCancel(ctx)
-			*engineCancel = cancel
 
-			statsCtx, statsCancel := context.WithCancel(ctx)
-			statsCancelMu.Lock()
-			go func() {
-				defer statsCancelMu.Unlock()
-				(*statsCollector).Start(statsCtx, cfg.StatsInterval())
-			}()
-			statsCancelMu.Unlock()
-
-			if err := (*currentEngine).Start(engineCtx, lastLoadTest); err != nil {
+			if err := (*currentEngine).Start(engineCtx, lastLoadTest, cfg.StatsInterval()); err != nil {
 				logger.Error("repeat configuration failed", zap.Error(err))
 				(*statsCollector).WriteFailure(err)
 				cancel()
-				statsCancel()
 				break
 			}
 
 			select {
 			case <-ctx.Done():
 				cancel()
-				statsCancel()
 				return nil
 			case <-time.After(lastLoadTest.Duration()):
 				logger.Info("Repeat configuration completed",
@@ -248,12 +217,12 @@ func processConfig(
 					zap.String("name", lastLoadTest.Name),
 				)
 			}
+			cancel()
 
 			if err := (*currentEngine).Stop(); err != nil {
 				logger.Error("engine wait failed", zap.Error(err))
 			}
 			cancel()
-			statsCancel()
 			time.Sleep(5 * time.Second)
 			repeatCount++
 		}
