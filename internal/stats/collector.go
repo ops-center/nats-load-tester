@@ -15,7 +15,7 @@ import (
 type Collector struct {
 	mu            sync.RWMutex
 	logger        *zap.Logger
-	config        config.LoadTestConfig
+	loadTestSpec  config.LoadTestSpec
 	storage       Storage
 	published     atomic.Uint64
 	consumed      atomic.Uint64
@@ -80,11 +80,11 @@ func NewCollector(logger *zap.Logger, storage Storage) *Collector {
 	}
 }
 
-func (c *Collector) SetConfig(cfg config.LoadTestConfig) error {
+func (c *Collector) SetConfig(cfg config.LoadTestSpec) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.config = cfg
+	c.loadTestSpec = cfg
 	c.Reset()
 
 	return nil
@@ -128,7 +128,7 @@ func (c *Collector) recordError(err error) {
 	c.errorsMu.Lock()
 	defer c.errorsMu.Unlock()
 
-	if len(c.errors) >= c.config.LogLimits.MaxLines {
+	if len(c.errors) >= int(c.loadTestSpec.LogLimits.MaxLines) {
 		c.errors = c.errors[1:]
 	}
 
@@ -138,8 +138,8 @@ func (c *Collector) recordError(err error) {
 	}
 
 	newErrorSize := len(err.Error())
-	if currentSize+newErrorSize > c.config.LogLimits.MaxBytes {
-		for currentSize+newErrorSize > c.config.LogLimits.MaxBytes && len(c.errors) > 0 {
+	if currentSize+newErrorSize > int(c.loadTestSpec.LogLimits.MaxBytes) {
+		for currentSize+newErrorSize > int(c.loadTestSpec.LogLimits.MaxBytes) && len(c.errors) > 0 {
 			currentSize -= len(c.errors[0].Error())
 			c.errors = c.errors[1:]
 		}

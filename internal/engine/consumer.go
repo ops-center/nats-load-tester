@@ -15,9 +15,9 @@ type ConsumerConfig struct {
 	StreamName     string
 	DurableName    string
 	Type           string
-	AckWaitSeconds int
+	AckWaitSeconds int64
 	MaxAckPending  int
-	ConsumeDelayMs int
+	ConsumeDelayMs int64
 	AckPolicy      string
 	UseJetStream   bool
 	Subject        string

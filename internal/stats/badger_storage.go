@@ -75,7 +75,7 @@ func NewBadgerStorage(path string, logger *zap.Logger) (*BadgerStorage, error) {
 	return storage, nil
 }
 
-func (b *BadgerStorage) WriteConfigStart(cfg config.LoadTestConfig) error {
+func (b *BadgerStorage) WriteConfigStart(cfg config.LoadTestSpec) error {
 	key := fmt.Sprintf("config:%s:%d", cfg.Hash(), time.Now().Unix())
 	value, err := json.Marshal(cfg)
 	if err != nil {

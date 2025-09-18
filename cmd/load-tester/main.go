@@ -69,7 +69,8 @@ func run(cmd *cobra.Command, args []string) error {
 		initialConfig = cfg
 	}
 
-	httpServer := controlplane.NewHTTPServer(port, logger)
+	configChannel := make(chan *config.Config)
+	httpServer := controlplane.NewHTTPServer(port, logger, configChannel)
 
 	var wg sync.WaitGroup
 
@@ -80,7 +81,7 @@ func run(cmd *cobra.Command, args []string) error {
 	})
 
 	wg.Go(func() {
-		runLoadTestManager(ctx, httpServer, initialConfig, logger)
+		runLoadTestManager(ctx, httpServer, initialConfig, logger, configChannel)
 	})
 
 	<-sigCh
@@ -92,7 +93,7 @@ func run(cmd *cobra.Command, args []string) error {
 }
 
 // TODO: refactor this ugly mess with proper dependency injection.
-func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer, initialConfig *config.Config, logger *zap.Logger) {
+func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer, initialConfig *config.Config, logger *zap.Logger, configChannel <-chan *config.Config) {
 	var currentEngine *engine.Engine
 	var statsCollector *stats.Collector
 	var storage stats.Storage
@@ -113,7 +114,7 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 	}()
 
 	if initialConfig != nil {
-		if err := processConfig(ctx, *initialConfig, &currentEngine, &statsCollector, &storage, &engineCancel, &statsCancelMu, httpServer, logger); err != nil {
+		if err := processConfig(ctx, initialConfig, &currentEngine, &statsCollector, &storage, &engineCancel, &statsCancelMu, httpServer, logger); err != nil {
 			logger.Error("failed to process initial config", zap.Error(err))
 		}
 	}
@@ -123,7 +124,7 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 		case <-ctx.Done():
 			return
 
-		case cfg := <-httpServer.ConfigChannel():
+		case cfg := <-configChannel:
 			logger.Info("Received new configuration")
 
 			if currentEngine != nil && currentEngine.IsRunning() {
@@ -143,7 +144,17 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 	}
 }
 
-func processConfig(ctx context.Context, cfg config.Config, currentEngine **engine.Engine, statsCollector **stats.Collector, storage *stats.Storage, engineCancel *context.CancelFunc, statsCancelMu *sync.Mutex, httpServer *controlplane.HTTPServer, logger *zap.Logger) error {
+func processConfig(
+	ctx context.Context,
+	cfg *config.Config,
+	currentEngine **engine.Engine,
+	statsCollector **stats.Collector,
+	storage *stats.Storage,
+	engineCancel *context.CancelFunc,
+	statsCancelMu *sync.Mutex,
+	httpServer *controlplane.HTTPServer,
+	logger *zap.Logger,
+) error {
 	var err error
 	*storage, err = createStorage(cfg.Storage, logger)
 	if err != nil {
@@ -155,10 +166,10 @@ func processConfig(ctx context.Context, cfg config.Config, currentEngine **engin
 
 	*currentEngine = engine.NewEngine(logger, *statsCollector)
 
-	for i, testCfg := range cfg.Configurations {
+	for i, loadTestSpec := range cfg.LoadTestSpecs {
 		logger.Info("Starting test configuration",
 			zap.Int("index", i),
-			zap.String("name", testCfg.Name),
+			zap.String("name", loadTestSpec.Name),
 		)
 
 		engineCtx, cancel := context.WithCancel(ctx)
@@ -172,7 +183,7 @@ func processConfig(ctx context.Context, cfg config.Config, currentEngine **engin
 		}()
 		statsCancelMu.Unlock()
 
-		if err := (*currentEngine).Start(engineCtx, testCfg); err != nil {
+		if err := (*currentEngine).Start(engineCtx, loadTestSpec); err != nil {
 			cancel()
 			statsCancel()
 			return fmt.Errorf("failed to start engine: %w", err)
@@ -183,8 +194,8 @@ func processConfig(ctx context.Context, cfg config.Config, currentEngine **engin
 			cancel()
 			statsCancel()
 			return nil
-		case <-time.After(testCfg.Duration()):
-			logger.Info("Test configuration completed", zap.String("name", testCfg.Name))
+		case <-time.After(loadTestSpec.Duration()):
+			logger.Info("Test configuration completed", zap.String("name", loadTestSpec.Name))
 		}
 
 		if err := (*currentEngine).Stop(); err != nil {
@@ -195,17 +206,17 @@ func processConfig(ctx context.Context, cfg config.Config, currentEngine **engin
 		time.Sleep(5 * time.Second)
 	}
 
-	if cfg.RepeatPolicy.Enabled && len(cfg.Configurations) > 0 {
-		lastConfig := cfg.Configurations[len(cfg.Configurations)-1]
+	if cfg.RepeatPolicy.Enabled && len(cfg.LoadTestSpecs) > 0 {
+		lastLoadTest := cfg.LoadTestSpecs[len(cfg.LoadTestSpecs)-1]
 		repeatCount := 1
 
 		for {
 			logger.Info("Starting repeat configuration",
 				zap.Int("iteration", repeatCount),
-				zap.String("name", lastConfig.Name),
+				zap.String("name", lastLoadTest.Name),
 			)
 
-			lastConfig.ApplyMultipliers(cfg.RepeatPolicy)
+			lastLoadTest.ApplyMultipliers(cfg.RepeatPolicy)
 
 			engineCtx, cancel := context.WithCancel(ctx)
 			*engineCancel = cancel
@@ -218,7 +229,7 @@ func processConfig(ctx context.Context, cfg config.Config, currentEngine **engin
 			}()
 			statsCancelMu.Unlock()
 
-			if err := (*currentEngine).Start(engineCtx, lastConfig); err != nil {
+			if err := (*currentEngine).Start(engineCtx, lastLoadTest); err != nil {
 				logger.Error("repeat configuration failed", zap.Error(err))
 				(*statsCollector).WriteFailure(err)
 				cancel()
@@ -231,10 +242,10 @@ func processConfig(ctx context.Context, cfg config.Config, currentEngine **engin
 				cancel()
 				statsCancel()
 				return nil
-			case <-time.After(lastConfig.Duration()):
+			case <-time.After(lastLoadTest.Duration()):
 				logger.Info("Repeat configuration completed",
 					zap.Int("iteration", repeatCount),
-					zap.String("name", lastConfig.Name),
+					zap.String("name", lastLoadTest.Name),
 				)
 			}
 

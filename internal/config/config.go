@@ -8,13 +8,13 @@ import (
 )
 
 type Config struct {
-	Configurations                 []LoadTestConfig `json:"configurations"`
-	RepeatPolicy                   RepeatPolicy     `json:"repeat_policy"`
-	Storage                        Storage          `json:"storage"`
-	StatsCollectionIntervalSeconds int              `json:"stats_collection_interval_seconds"`
+	LoadTestSpecs                  []LoadTestSpec `json:"load_test_specs"`
+	RepeatPolicy                   RepeatPolicy   `json:"repeat_policy"`
+	Storage                        Storage        `json:"storage"`
+	StatsCollectionIntervalSeconds int64          `json:"stats_collection_interval_seconds"`
 }
 
-type LoadTestConfig struct {
+type LoadTestSpec struct {
 	Name           string          `json:"name"`
 	NATSURL        string          `json:"nats_url"`
 	NATSCredsFile  string          `json:"nats_creds_file,omitempty"`
@@ -32,8 +32,8 @@ type StreamConfig struct {
 	Count                      int      `json:"count"`
 	Replicas                   int      `json:"replicas"`
 	Subjects                   []string `json:"subjects"`
-	MessagesPerStreamPerSecond int      `json:"messages_per_stream_per_second"`
-	MessageSizeBytes           int      `json:"message_size_bytes"`
+	MessagesPerStreamPerSecond int64    `json:"messages_per_stream_per_second"`
+	MessageSizeBytes           int64    `json:"message_size_bytes"`
 	PublishPattern             string   `json:"publish_pattern"`
 }
 
@@ -50,21 +50,21 @@ type ConsumerConfig struct {
 	Type              string `json:"type"`
 	CountPerStream    int    `json:"count_per_stream"`
 	DurableNamePrefix string `json:"durable_name_prefix"`
-	AckWaitSeconds    int    `json:"ack_wait_seconds"`
+	AckWaitSeconds    int64  `json:"ack_wait_seconds"`
 	MaxAckPending     int    `json:"max_ack_pending"`
-	ConsumeDelayMs    int    `json:"consume_delay_ms"`
+	ConsumeDelayMs    int64  `json:"consume_delay_ms"`
 	AckPolicy         string `json:"ack_policy"`
 }
 
 type BehaviorConfig struct {
-	DurationSeconds           int `json:"duration_seconds"`
-	RampUpSeconds             int `json:"ramp_up_seconds"`
-	CheckpointIntervalSeconds int `json:"checkpoint_interval_seconds"`
+	DurationSeconds           int64 `json:"duration_seconds"`
+	RampUpSeconds             int64 `json:"ramp_up_seconds"`
+	CheckpointIntervalSeconds int64 `json:"checkpoint_interval_seconds"`
 }
 
 type LogLimits struct {
-	MaxLines int `json:"max_lines"`
-	MaxBytes int `json:"max_bytes"`
+	MaxLines int   `json:"max_lines"`
+	MaxBytes int64 `json:"max_bytes"`
 }
 
 type RepeatPolicy struct {
@@ -104,11 +104,11 @@ type Storage struct {
 }
 
 func (c *Config) Validate() error {
-	if len(c.Configurations) == 0 {
+	if len(c.LoadTestSpecs) == 0 {
 		return fmt.Errorf("at least one configuration required")
 	}
 
-	for i, cfg := range c.Configurations {
+	for i, cfg := range c.LoadTestSpecs {
 		if err := cfg.Validate(); err != nil {
 			return fmt.Errorf("configuration %d: %w", i, err)
 		}
@@ -129,7 +129,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func (c *LoadTestConfig) Validate() error {
+func (c *LoadTestSpec) Validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("name required")
 	}
@@ -273,25 +273,25 @@ func (c *Config) Hash() string {
 	return fmt.Sprintf("%x", h)
 }
 
-func (c *LoadTestConfig) Hash() string {
+func (c *LoadTestSpec) Hash() string {
 	data, _ := json.Marshal(c)
 	h := sha256.Sum256(data)
 	return fmt.Sprintf("%x", h)
 }
 
-func (c *LoadTestConfig) ApplyMultipliers(rp RepeatPolicy) {
+func (c *LoadTestSpec) ApplyMultipliers(rp RepeatPolicy) {
 	for i := range c.Streams {
 		c.Streams[i].Count = int(float64(c.Streams[i].Count) * rp.Streams.CountMultiplier)
 		c.Streams[i].Replicas = int(float64(c.Streams[i].Replicas) * rp.Streams.ReplicasMultiplier)
-		c.Streams[i].MessagesPerStreamPerSecond = int(float64(c.Streams[i].MessagesPerStreamPerSecond) * rp.Streams.MessagesPerStreamPerSecondMultiplier)
+		c.Streams[i].MessagesPerStreamPerSecond = int64(float64(c.Streams[i].MessagesPerStreamPerSecond) * rp.Streams.MessagesPerStreamPerSecondMultiplier)
 	}
 
-	c.Behavior.DurationSeconds = int(float64(c.Behavior.DurationSeconds) * rp.Behavior.DurationMultiplier)
-	c.Behavior.RampUpSeconds = int(float64(c.Behavior.RampUpSeconds) * rp.Behavior.RampUpMultiplier)
+	c.Behavior.DurationSeconds = int64(float64(c.Behavior.DurationSeconds) * rp.Behavior.DurationMultiplier)
+	c.Behavior.RampUpSeconds = int64(float64(c.Behavior.RampUpSeconds) * rp.Behavior.RampUpMultiplier)
 
-	c.Consumers.AckWaitSeconds = int(float64(c.Consumers.AckWaitSeconds) * rp.Consumers.AckWaitMultiplier)
+	c.Consumers.AckWaitSeconds = int64(float64(c.Consumers.AckWaitSeconds) * rp.Consumers.AckWaitMultiplier)
 	c.Consumers.MaxAckPending = int(float64(c.Consumers.MaxAckPending) * rp.Consumers.MaxAckPendingMultiplier)
-	c.Consumers.ConsumeDelayMs = int(float64(c.Consumers.ConsumeDelayMs) * rp.Consumers.ConsumeDelayMultiplier)
+	c.Consumers.ConsumeDelayMs = int64(float64(c.Consumers.ConsumeDelayMs) * rp.Consumers.ConsumeDelayMultiplier)
 
 	c.Publishers.CountPerStream = int(float64(c.Publishers.CountPerStream) * rp.Publishers.CountPerStreamMultiplier)
 	c.Publishers.PublishRatePerSecond = int(float64(c.Publishers.PublishRatePerSecond) * rp.Publishers.PublishRateMultiplier)
@@ -302,15 +302,15 @@ func (c *Config) StatsInterval() time.Duration {
 	return time.Duration(c.StatsCollectionIntervalSeconds) * time.Second
 }
 
-func (c *LoadTestConfig) Duration() time.Duration {
+func (c *LoadTestSpec) Duration() time.Duration {
 	return time.Duration(c.Behavior.DurationSeconds) * time.Second
 }
 
-func (c *LoadTestConfig) RampUpDuration() time.Duration {
+func (c *LoadTestSpec) RampUpDuration() time.Duration {
 	return time.Duration(c.Behavior.RampUpSeconds) * time.Second
 }
 
 // TODO: use this
-func (c *LoadTestConfig) CheckpointInterval() time.Duration {
+func (c *LoadTestSpec) CheckpointInterval() time.Duration {
 	return time.Duration(c.Behavior.CheckpointIntervalSeconds) * time.Second
 }

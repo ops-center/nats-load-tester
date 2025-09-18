@@ -1,102 +1,39 @@
 package controlplane
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"go.bytebuilders.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
 )
-
-type HTTPServer struct {
-	*BaseServer
-	server *http.Server
-	logger *zap.Logger
-	port   int
-}
-
-func NewHTTPServer(port int, logger *zap.Logger) *HTTPServer {
-	return &HTTPServer{
-		BaseServer: NewBaseServer(),
-		port:       port,
-		logger:     logger,
-	}
-}
-
-func (h *HTTPServer) Start(ctx context.Context) error {
-	r := chi.NewRouter()
-
-	r.Use(middleware.RequestID)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
-
-	r.Post("/config", h.handleConfigUpdate)
-	r.Get("/config", h.handleConfigGet)
-	r.Get("/health", h.handleHealth)
-	r.Get("/stats/history", h.handleStatsHistory)
-
-	h.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", h.port),
-		Handler: r,
-	}
-
-	h.logger.Info("Starting HTTP server", zap.Int("port", h.port))
-
-	go func() {
-		<-ctx.Done()
-		if err := h.Stop(); err != nil {
-			h.logger.Error("failed to stop HTTP server", zap.Error(err))
-		}
-	}()
-
-	return h.server.ListenAndServe()
-}
-
-func (h *HTTPServer) Stop() error {
-	if h.server == nil {
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	return h.server.Shutdown(ctx)
-}
 
 func (h *HTTPServer) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
 	var cfg config.Config
 
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		h.logger.Error("Failed to decode config", zap.Error(err))
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		h.logger.Error("Failed to decode config", zap.Error(err))
 		return
 	}
 
 	if err := cfg.Validate(); err != nil {
-		h.logger.Error("Invalid configuration", zap.Error(err))
 		http.Error(w, fmt.Sprintf("Invalid configuration: %v", err), http.StatusBadRequest)
+		h.logger.Error("Invalid configuration", zap.Error(err))
 		return
 	}
 
-	updated := h.SetConfig(cfg)
+	h.configSendChannel <- &cfg
 
 	response := map[string]any{
-		"updated": updated,
-		"hash":    cfg.Hash(),
-	}
-
-	if !updated {
-		response["message"] = "Configuration unchanged"
+		"queued": true,
+		"hash":   cfg.Hash(),
 	}
 
 	h.logger.Info("Configuration update request",
-		zap.Bool("updated", updated),
+		zap.Bool("queued", true),
 		zap.String("hash", cfg.Hash()),
 	)
 

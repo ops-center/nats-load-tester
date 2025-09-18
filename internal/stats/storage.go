@@ -5,7 +5,7 @@ import (
 )
 
 type Storage interface {
-	WriteConfigStart(cfg config.LoadTestConfig) error
+	WriteConfigStart(cfg config.LoadTestSpec) error
 	WriteStats(stats Stats) error
 	WriteFailure(stats Stats) error
 	Close() error

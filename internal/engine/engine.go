@@ -19,7 +19,7 @@ type Engine struct {
 	statsCollector *stats.Collector
 	nc             *nats.Conn
 	js             nats.JetStreamContext
-	currentConfig  *config.LoadTestConfig
+	loadTestParams *config.LoadTestSpec
 	publishers     []*Publisher
 	consumers      []*Consumer
 	cancel         context.CancelFunc
@@ -36,7 +36,7 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector) *Engine {
 	}
 }
 
-func (e *Engine) Start(ctx context.Context, cfg config.LoadTestConfig) error {
+func (e *Engine) Start(ctx context.Context, cfg config.LoadTestSpec) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -50,7 +50,7 @@ func (e *Engine) Start(ctx context.Context, cfg config.LoadTestConfig) error {
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
-	e.currentConfig = &cfg
+	e.loadTestParams = &cfg
 	if err := e.statsCollector.SetConfig(cfg); err != nil {
 		return fmt.Errorf("failed to set stats collector config: %w", err)
 	}
@@ -115,7 +115,7 @@ func (e *Engine) IsRunning() bool {
 	return e.running
 }
 
-func (e *Engine) connect(cfg config.LoadTestConfig) error {
+func (e *Engine) connect(cfg config.LoadTestSpec) error {
 	opts := []nats.Option{
 		nats.Name(cfg.ClientIDPrefix + "-engine"),
 		nats.MaxReconnects(-1),
@@ -155,7 +155,7 @@ func (e *Engine) connect(cfg config.LoadTestConfig) error {
 	return nil
 }
 
-func (e *Engine) setupStreams(cfg config.LoadTestConfig) error {
+func (e *Engine) setupStreams(cfg config.LoadTestSpec) error {
 	for _, streamCfg := range cfg.Streams {
 		for i := 0; i < streamCfg.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", streamCfg.NamePrefix, i+1)
@@ -196,7 +196,7 @@ func (e *Engine) setupStreams(cfg config.LoadTestConfig) error {
 	return nil
 }
 
-func (e *Engine) startPublishers(ctx context.Context, cfg config.LoadTestConfig) {
+func (e *Engine) startPublishers(ctx context.Context, cfg config.LoadTestSpec) {
 	for _, streamCfg := range cfg.Streams {
 		for i := 0; i < streamCfg.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", streamCfg.NamePrefix, i+1)
@@ -232,7 +232,7 @@ func (e *Engine) startPublishers(ctx context.Context, cfg config.LoadTestConfig)
 	}
 }
 
-func (e *Engine) startConsumers(ctx context.Context, cfg config.LoadTestConfig) error {
+func (e *Engine) startConsumers(ctx context.Context, cfg config.LoadTestSpec) error {
 	consumerStartErrGroup := &errgroup.Group{}
 
 	for _, streamCfg := range cfg.Streams {
@@ -287,7 +287,7 @@ func (e *Engine) startConsumers(ctx context.Context, cfg config.LoadTestConfig) 
 	return nil
 }
 
-func (e *Engine) startRampUp(ctx context.Context, cfg config.LoadTestConfig) error {
+func (e *Engine) startRampUp(ctx context.Context, cfg config.LoadTestSpec) error {
 	rampUpDuration := cfg.RampUpDuration()
 	rampUpStart := time.Now()
 

@@ -29,7 +29,7 @@ func NewFileStorage(filepath string) (*FileStorage, error) {
 	}, nil
 }
 
-func (f *FileStorage) WriteConfigStart(cfg config.LoadTestConfig) error {
+func (f *FileStorage) WriteConfigStart(cfg config.LoadTestSpec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
