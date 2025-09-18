@@ -24,7 +24,6 @@ type Engine struct {
 	consumers      []*Consumer
 	cancel         context.CancelFunc
 	eg             *errgroup.Group
-	running        bool
 }
 
 func NewEngine(logger *zap.Logger, statsCollector *stats.Collector) *Engine {
@@ -41,10 +40,6 @@ func (e *Engine) Start(ctx context.Context, cfg config.LoadTestSpec, statsInterv
 	defer e.mu.Unlock()
 
 	e.statsCollector.Start(ctx, statsInterval)
-	if e.running {
-		return fmt.Errorf("engine already running")
-	}
-
 	e.logger.Info("Starting engine with configuration", zap.String("name", cfg.Name))
 
 	if err := e.connect(cfg); err != nil {
@@ -58,7 +53,6 @@ func (e *Engine) Start(ctx context.Context, cfg config.LoadTestSpec, statsInterv
 
 	engineCtx, cancel := context.WithCancel(ctx)
 	e.cancel = cancel
-	e.running = true
 
 	// Create errgroup with context
 	e.eg, engineCtx = errgroup.WithContext(engineCtx)
@@ -88,32 +82,20 @@ func (e *Engine) Stop() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if !e.running {
-		return nil
-	}
-
 	e.logger.Info("Stopping engine")
 
 	if e.cancel != nil {
 		e.cancel()
 	}
 
-	// Wait for all goroutines and collect any errors
 	var err error
 	if e.eg != nil {
 		err = e.eg.Wait()
 	}
 
 	e.cleanup()
-	e.running = false
 
 	return err
-}
-
-func (e *Engine) IsRunning() bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.running
 }
 
 func (e *Engine) connect(cfg config.LoadTestSpec) error {

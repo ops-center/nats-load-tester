@@ -127,30 +127,43 @@ func processConfig(
 	engine *loadtest_engine.Engine,
 	logger *zap.Logger,
 ) error {
+	// returns true if no further call should be made. e.g; upon engine failure
+	processLoadTestSpec := func(spec config.LoadTestSpec, specName string) (bool, error) {
+		engineCtx, cancel := context.WithCancel(ctx)
+
+		if err := engine.Start(engineCtx, spec, cfg.StatsInterval()); err != nil {
+			cancel()
+			return true, fmt.Errorf("failed to start engine: %w", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			cancel()
+			return true, nil
+		case <-time.After(spec.Duration()):
+			logger.Info(specName+" spec completed", zap.String("name", spec.Name))
+		}
+		cancel()
+
+		if err := engine.Stop(); err != nil {
+			logger.Error("engine wait failed", zap.Error(err))
+		}
+		return false, nil
+	}
+
 	for i, loadTestSpec := range cfg.LoadTestSpecs {
 		logger.Info("Starting test configuration",
 			zap.Int("index", i),
 			zap.String("name", loadTestSpec.Name),
 		)
 
-		engineCtx, cancel := context.WithCancel(ctx)
-
-		if err := (*engine).Start(engineCtx, loadTestSpec, cfg.StatsInterval()); err != nil {
-			cancel()
-			return fmt.Errorf("failed to start engine: %w", err)
+		done, err := processLoadTestSpec(loadTestSpec, "Test")
+		if err != nil {
+			logger.Error("failed to process load test spec", zap.Error(err))
 		}
 
-		select {
-		case <-ctx.Done():
-			cancel()
-			return nil
-		case <-time.After(loadTestSpec.Duration()):
-			logger.Info("Test spec completed", zap.String("name", loadTestSpec.Name))
-		}
-		cancel()
-
-		if err := engine.Stop(); err != nil {
-			logger.Error("engine wait failed", zap.Error(err))
+		if done {
+			break
 		}
 		time.Sleep(5 * time.Second)
 	}
@@ -165,36 +178,23 @@ func processConfig(
 				zap.String("name", lastLoadTest.Name),
 			)
 
-			lastLoadTest.ApplyMultipliers(cfg.RepeatPolicy)
+			done, err := processLoadTestSpec(lastLoadTest, "Repeat")
+			if err != nil {
+				logger.Error("failed to process repeat spec", zap.Error(err))
+			}
 
-			engineCtx, cancel := context.WithCancel(ctx)
-
-			if err := engine.Start(engineCtx, lastLoadTest, cfg.StatsInterval()); err != nil {
-				logger.Error("repeat configuration failed", zap.Error(err))
-				// (*statsCollector).WriteFailure(err)
-				cancel()
+			if done {
 				break
 			}
 
-			select {
-			case <-ctx.Done():
-				cancel()
-				return nil
-			case <-time.After(lastLoadTest.Duration()):
-				logger.Info("Repeat configuration completed",
-					zap.Int("iteration", repeatCount),
-					zap.String("name", lastLoadTest.Name),
-				)
-			}
-			cancel()
-
-			if err := engine.Stop(); err != nil {
-				logger.Error("engine wait failed", zap.Error(err))
-			}
-			cancel()
-			time.Sleep(5 * time.Second)
+			logger.Info("Repeat spec completed",
+				zap.Int("iteration", repeatCount),
+				zap.String("name", lastLoadTest.Name),
+			)
 			repeatCount++
+			time.Sleep(5 * time.Second)
 		}
+
 	}
 
 	return nil
