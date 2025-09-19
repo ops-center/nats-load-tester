@@ -25,6 +25,24 @@ func (h *HTTPServer) handleConfigUpdate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if cfg.Equals(h.getConfig()) {
+		response := map[string]any{
+			"queued": false,
+			"hash":   cfg.Hash(),
+		}
+
+		h.logger.Info("Configuration update request - no changes",
+			zap.Bool("queued", false),
+			zap.String("hash", cfg.Hash()),
+		)
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			h.logger.Error("failed to encode response", zap.Error(err))
+		}
+		return
+	}
+
 	select {
 	case h.configSendChannel <- &cfg:
 	case <-time.After(5 * time.Second):

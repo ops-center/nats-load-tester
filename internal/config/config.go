@@ -268,6 +268,13 @@ func (c *Config) Hash() string {
 	return fmt.Sprintf("%x", h)
 }
 
+func (c *Config) Equals(otherCfg *Config) bool{
+	if c == nil || otherCfg == nil{
+		return c==nil && otherCfg == nil
+	}
+	return c.Hash() == otherCfg.Hash()
+}
+
 func (c *LoadTestSpec) Hash() string {
 	data, _ := json.Marshal(c)
 	h := sha256.Sum256(data)
