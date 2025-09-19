@@ -18,9 +18,10 @@ import (
 )
 
 var (
-	configFile string
-	port       int
-	logLevel   string
+	configFile    string
+	port          int
+	logLevel      string
+	loadTestMutex sync.Mutex
 )
 
 func main() {
@@ -58,7 +59,7 @@ func run(cmd *cobra.Command, args []string) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	configChannel := make(chan *config.Config)
+	configChannel := make(chan *config.Config, 100)
 	// TODO: Check for existing default config here and send to channel
 
 	httpServer := controlplane.NewHTTPServer(port, logger, configChannel)
@@ -83,39 +84,76 @@ func run(cmd *cobra.Command, args []string) error {
 }
 
 func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer, logger *zap.Logger, configChannel <-chan *config.Config) {
+	var lastConfigCancel context.CancelFunc = nil
+
 	for {
 		select {
 		case <-ctx.Done():
+			if lastConfigCancel != nil {
+				lastConfigCancel()
+			}
 			return
 
 		case cfg := <-configChannel:
 			logger.Info("Received new configuration")
 
+			if lastConfigCancel != nil {
+				lastConfigCancel()
+			}
+
+			loadTestMutex.Lock()
+
+			// drain the channel and extract the last config
+			for {
+				done := false
+				select {
+				case newCfg := <-configChannel:
+					cfg = newCfg
+				default:
+					done = true
+				}
+				if done {
+					break
+				}
+			}
+
+			var cfgCtx context.Context
+			cfgCtx, lastConfigCancel = context.WithCancel(ctx)
+
+			httpServer.SetConfig(cfg)
+
 			storage, err := createStorage(cfg.Storage, logger)
 			if err != nil {
 				logger.Error("failed to create storage", zap.Error(err))
+				lastConfigCancel()
+				loadTestMutex.Unlock()
 				continue
 			}
 
 			statsCollector := stats.NewCollector(logger, storage)
-			engine := loadtest_engine.NewEngine(logger, statsCollector)
 			httpServer.SetCollector(statsCollector)
+			engine := loadtest_engine.NewEngine(logger, statsCollector)
 
-			if err := processConfig(ctx, cfg, engine, logger); err != nil {
-				logger.Error("failed to process config", zap.Error(err))
-			}
+			go func(ctx context.Context, cfg *config.Config, engine *loadtest_engine.Engine, storage stats.Storage) {
+				defer loadTestMutex.Unlock()
 
-			if engine != nil {
-				if err := engine.Stop(); err != nil {
-					logger.Error("engine wait failed", zap.Error(err))
+				defer func() {
+					if engine != nil {
+						if err := engine.Stop(); err != nil {
+							logger.Error("engine wait failed", zap.Error(err))
+						}
+					}
+					if storage != nil {
+						if err := storage.Close(); err != nil {
+							logger.Error("failed to close storage", zap.Error(err))
+						}
+					}
+				}()
+
+				if err := processConfig(ctx, cfg, engine, logger); err != nil {
+					logger.Error("failed to process config", zap.Error(err))
 				}
-			}
-
-			if storage != nil {
-				if err = storage.Close(); err != nil {
-					logger.Error("failed to close storage", zap.Error(err))
-				}
-			}
+			}(cfgCtx, cfg, engine, storage)
 
 		}
 	}
@@ -130,20 +168,18 @@ func processConfig(
 	// returns true if no further call should be made. e.g; upon engine failure
 	processLoadTestSpec := func(spec config.LoadTestSpec, specName string) (bool, error) {
 		engineCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
 		if err := engine.Start(engineCtx, spec, cfg.StatsInterval()); err != nil {
-			cancel()
 			return true, fmt.Errorf("failed to start engine: %w", err)
 		}
 
 		select {
 		case <-ctx.Done():
-			cancel()
 			return true, nil
 		case <-time.After(spec.Duration()):
 			logger.Info(specName+" spec completed", zap.String("name", spec.Name))
 		}
-		cancel()
 
 		if err := engine.Stop(); err != nil {
 			logger.Error("engine wait failed", zap.Error(err))
@@ -158,12 +194,14 @@ func processConfig(
 		)
 
 		done, err := processLoadTestSpec(loadTestSpec, "Test")
+		if done {
+			if err != nil {
+				return fmt.Errorf("failed to process load test spec: %w", err)
+			}
+			return nil
+		}
 		if err != nil {
 			logger.Error("failed to process load test spec", zap.Error(err))
-		}
-
-		if done {
-			break
 		}
 		time.Sleep(5 * time.Second)
 	}
@@ -179,18 +217,21 @@ func processConfig(
 			)
 
 			done, err := processLoadTestSpec(lastLoadTest, "Repeat")
-			if err != nil {
-				logger.Error("failed to process repeat spec", zap.Error(err))
-			}
-
 			if done {
-				break
+				if err != nil {
+					return fmt.Errorf("failed to process repeat load test spec: %w", err)
+				}
+				return nil
+			}
+			if err != nil {
+				logger.Error("failed to process repeat load test spec", zap.Error(err))
 			}
 
 			logger.Info("Repeat spec completed",
 				zap.Int("iteration", repeatCount),
 				zap.String("name", lastLoadTest.Name),
 			)
+
 			repeatCount++
 			time.Sleep(5 * time.Second)
 		}

@@ -16,8 +16,7 @@ import (
 
 type HTTPServer struct {
 	mu                sync.RWMutex
-	currentConfig     *config.Config
-	configHash        string
+	configManager     configManager
 	configSendChannel chan<- *config.Config
 	collector         *stats.Collector
 	server            *http.Server
@@ -25,10 +24,16 @@ type HTTPServer struct {
 	port              int
 }
 
+type configManager struct {
+	config *config.Config
+	hash   string
+}
+
 func NewHTTPServer(port int, logger *zap.Logger, configSendChannel chan<- *config.Config) *HTTPServer {
 	return &HTTPServer{
 		port:              port,
 		logger:            logger,
+		configManager:     configManager{},
 		configSendChannel: configSendChannel,
 	}
 }
@@ -74,17 +79,10 @@ func (h *HTTPServer) Stop() error {
 	return h.server.Shutdown(ctx)
 }
 
-func (h *HTTPServer) GetConfig() *config.Config {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.currentConfig
-}
-
 func (h *HTTPServer) SetConfig(cfg *config.Config) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.currentConfig = cfg
-	h.configHash = cfg.Hash()
+	h.configManager.setConfig(cfg)
 }
 
 func (h *HTTPServer) SetCollector(collector *stats.Collector) {
@@ -93,7 +91,18 @@ func (h *HTTPServer) SetCollector(collector *stats.Collector) {
 	h.collector = collector
 }
 
-func (h *HTTPServer) GetCollector() *stats.Collector {
+func (c *configManager) setConfig(cfg *config.Config) {
+	c.config = cfg
+	c.hash = cfg.Hash()
+}
+
+func (h *HTTPServer) getConfig() *config.Config {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.configManager.config
+}
+
+func (h *HTTPServer) getCollector() *stats.Collector {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.collector

@@ -25,7 +25,13 @@ func (h *HTTPServer) handleConfigUpdate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	h.configSendChannel <- &cfg
+	select {
+	case h.configSendChannel <- &cfg:
+	case <-time.After(5 * time.Second):
+		http.Error(w, "Server is busy processing another configuration", http.StatusServiceUnavailable)
+		h.logger.Warn("Configuration update rejected - server busy")
+		return
+	}
 
 	response := map[string]any{
 		"queued": true,
@@ -44,7 +50,7 @@ func (h *HTTPServer) handleConfigUpdate(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *HTTPServer) handleConfigGet(w http.ResponseWriter, r *http.Request) {
-	cfg := h.GetConfig()
+	cfg := h.getConfig()
 	if cfg == nil {
 		http.Error(w, "No configuration set", http.StatusNotFound)
 		return
@@ -69,7 +75,7 @@ func (h *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPServer) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
-	collector := h.GetCollector()
+	collector := h.getCollector()
 	if collector == nil {
 		http.Error(w, "Stats collector not available", http.StatusServiceUnavailable)
 		return
