@@ -12,7 +12,9 @@
           "name_prefix": "load_stream",
           "count": 100,
           "replicas": 3,
-          "subjects": ["test.subject.{}"],
+          "subjects": [
+            "test.subject.{}"
+          ],
           "messages_per_stream_per_second": 1000,
           "message_size_bytes": 256,
           "publish_pattern": "steady"
@@ -36,9 +38,7 @@
         "ack_policy": "explicit"
       },
       "behavior": {
-        "duration_seconds": 600,
-        "ramp_up_seconds": 30,
-        "checkpoint_interval_seconds": 10
+        "ramp_up_seconds": 30
       },
       "log_limits": {
         "max_lines": 200,

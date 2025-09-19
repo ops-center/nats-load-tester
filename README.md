@@ -305,8 +305,7 @@ Test execution timing and behavior configuration.
 ```json
 {
   "duration_seconds": 300,
-  "ramp_up_seconds": 30,
-  "checkpoint_interval_seconds": 10
+  "ramp_up_seconds": 30
 }
 ```
 
@@ -314,7 +313,6 @@ Test execution timing and behavior configuration.
 |-------|------|-------------|---------|
 | `duration_seconds` | `int64` | Total test duration in seconds | `600` |
 | `ramp_up_seconds` | `int64` | Gradual ramp-up period for publishers/consumers | `1` |
-| `checkpoint_interval_seconds` | `int64` | Interval for progress checkpoints | `10` |
 
 ### Storage
 Statistics storage backend configuration with multiple options for persistence and output.

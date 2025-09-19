@@ -104,18 +104,18 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 			loadTestMutex.Lock()
 
 			// drain the channel and extract the last config
-			for {
-				done := false
-				select {
-				case newCfg := <-configChannel:
-					cfg = newCfg
-				default:
-					done = true
+			func() {
+				for {
+					select {
+					case newCfg := <-configChannel:
+						cfg = newCfg
+					case <-time.After(30 * time.Second):
+						return
+					default:
+						return
+					}
 				}
-				if done {
-					break
-				}
-			}
+			}()
 
 			var cfgCtx context.Context
 			cfgCtx, lastConfigCancel = context.WithCancel(ctx)

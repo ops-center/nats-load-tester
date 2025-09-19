@@ -57,9 +57,8 @@ type ConsumerConfig struct {
 }
 
 type BehaviorConfig struct {
-	DurationSeconds           int64 `json:"duration_seconds"`
-	RampUpSeconds             int64 `json:"ramp_up_seconds"`
-	CheckpointIntervalSeconds int64 `json:"checkpoint_interval_seconds"`
+	DurationSeconds int64 `json:"duration_seconds"`
+	RampUpSeconds   int64 `json:"ramp_up_seconds"`
 }
 
 type LogLimits struct {
@@ -260,10 +259,6 @@ func (b *BehaviorConfig) Validate() error {
 		b.RampUpSeconds = 1
 	}
 
-	if b.CheckpointIntervalSeconds <= 0 {
-		b.CheckpointIntervalSeconds = 10
-	}
-
 	return nil
 }
 
@@ -308,9 +303,4 @@ func (c *LoadTestSpec) Duration() time.Duration {
 
 func (c *LoadTestSpec) RampUpDuration() time.Duration {
 	return time.Duration(c.Behavior.RampUpSeconds) * time.Second
-}
-
-// TODO: use this
-func (c *LoadTestSpec) CheckpointInterval() time.Duration {
-	return time.Duration(c.Behavior.CheckpointIntervalSeconds) * time.Second
 }
