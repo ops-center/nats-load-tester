@@ -127,7 +127,12 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 				logger.Error("failed to create storage", zap.Error(err))
 				lastConfigCancel()
 				loadTestMutex.Unlock()
-				continue
+				break
+			}
+
+			// Write configuration info block as per PRD
+			if err := storage.WriteConfigInfo(cfg, cfg.Hash()); err != nil {
+				logger.Error("failed to write config info", zap.Error(err))
 			}
 
 			statsCollector := stats.NewCollector(logger, storage)

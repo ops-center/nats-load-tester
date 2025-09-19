@@ -268,9 +268,9 @@ func (c *Config) Hash() string {
 	return fmt.Sprintf("%x", h)
 }
 
-func (c *Config) Equals(otherCfg *Config) bool{
-	if c == nil || otherCfg == nil{
-		return c==nil && otherCfg == nil
+func (c *Config) Equals(otherCfg *Config) bool {
+	if c == nil || otherCfg == nil {
+		return c == nil && otherCfg == nil
 	}
 	return c.Hash() == otherCfg.Hash()
 }

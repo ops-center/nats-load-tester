@@ -27,8 +27,10 @@ type Collector struct {
 	errorsMu      sync.Mutex
 	startTime     time.Time
 	lastStatsTime time.Time
-	statsHistory  []Stats
-	maxHistory    int
+
+	// Configuration hash tracking for hot reloading
+	currentConfigHash string
+
 	// Ramp-up tracking
 	rampUpActive   bool
 	rampUpStart    time.Time
@@ -73,8 +75,6 @@ func NewCollector(logger *zap.Logger, storage Storage) *Collector {
 		storage:       storage,
 		latencies:     make([]time.Duration, 0, 10000),
 		errors:        make([]error, 0),
-		statsHistory:  make([]Stats, 0, 10),
-		maxHistory:    10,
 		startTime:     time.Now(),
 		lastStatsTime: time.Now(),
 	}
@@ -84,6 +84,8 @@ func (c *Collector) SetConfig(cfg config.LoadTestSpec) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Set current configuration hash for tracking
+	c.currentConfigHash = cfg.Hash()
 	c.loadTestSpec = cfg
 	c.Reset()
 
@@ -97,7 +99,6 @@ func (c *Collector) Reset() {
 	c.consumeErrors.Store(0)
 	c.latencies = c.latencies[:0]
 	c.errors = c.errors[:0]
-	c.statsHistory = c.statsHistory[:0]
 	c.startTime = time.Now()
 	c.lastStatsTime = time.Now()
 }
@@ -191,12 +192,12 @@ func (c *Collector) CollectStats() Stats {
 
 	c.lastStatsTime = now
 
-	c.mu.Lock()
-	c.statsHistory = append(c.statsHistory, stats)
-	if len(c.statsHistory) > c.maxHistory {
-		c.statsHistory = c.statsHistory[1:]
+	// Write individual stats directly to storage (no in-memory cache)
+	if c.currentConfigHash != "" && c.storage != nil {
+		if err := c.storage.WriteStats(stats, c.currentConfigHash); err != nil {
+			c.logger.Error("Failed to write stats", zap.Error(err))
+		}
 	}
-	c.mu.Unlock()
 
 	return stats
 }
@@ -238,38 +239,50 @@ func (c *Collector) Start(ctx context.Context, statsInterval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			stats := c.CollectStats()
-			// Store stats automatically on each collection
-			if c.storage != nil {
-				if err := c.storage.WriteStats(stats); err != nil {
-					c.logger.Error("Failed to store stats", zap.Error(err))
-				}
-			}
+			c.CollectStats()
+			// Stats are automatically written to storage in CollectStats()
 		}
 	}
 }
 
 func (c *Collector) GetHistory() []Stats {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	configHash := c.currentConfigHash
+	c.mu.RUnlock()
 
-	history := make([]Stats, len(c.statsHistory))
-	copy(history, c.statsHistory)
-	return history
+	if configHash == "" || c.storage == nil {
+		return []Stats{}
+	}
+
+	// Read from storage instead of in-memory cache
+	entries, err := c.storage.GetStats(configHash, 10, nil) // Last 10 stats
+	if err != nil {
+		c.logger.Error("Failed to get stats history from storage", zap.Error(err))
+		return []Stats{}
+	}
+
+	result := make([]Stats, len(entries))
+	for i, entry := range entries {
+		result[i] = entry.Stats
+	}
+	return result
 }
 
 func (c *Collector) WriteFailure(err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	configHash := c.currentConfigHash
+	c.mu.RUnlock()
 
 	failureStats := Stats{
 		Timestamp: time.Now(),
 		Errors:    []error{err},
 	}
 
-	c.statsHistory = append(c.statsHistory, failureStats)
-	if len(c.statsHistory) > c.maxHistory {
-		c.statsHistory = c.statsHistory[1:]
+	// Write failure directly to storage (no in-memory cache)
+	if configHash != "" && c.storage != nil {
+		if writeErr := c.storage.WriteFailure(failureStats, configHash); writeErr != nil {
+			c.logger.Error("Failed to write failure stats", zap.Error(writeErr))
+		}
 	}
 }
 

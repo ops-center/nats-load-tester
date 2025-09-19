@@ -29,7 +29,7 @@ func NewFileStorage(filepath string) (*FileStorage, error) {
 	}, nil
 }
 
-func (f *FileStorage) WriteConfigStart(cfg config.LoadTestSpec) error {
+func (f *FileStorage) WriteConfigInfo(cfg *config.Config, hash string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -38,23 +38,23 @@ func (f *FileStorage) WriteConfigStart(cfg config.LoadTestSpec) error {
 		return err
 	}
 
-	output := fmt.Sprintf(`
---------------------------------------------------------------------------------
+	output := fmt.Sprintf(`--------------------------------------------------------------------------------
 Configuration Info: %s
 Hash: %s
 Config: %s
 --------------------------------------------------------------------------------
 
-`, time.Now().Format(time.RFC3339), cfg.Hash(), string(configJSON))
+`, time.Now().Format(time.RFC3339), hash, string(configJSON))
 
 	_, err = f.file.WriteString(output)
 	return err
 }
 
-func (f *FileStorage) WriteStats(stats Stats) error {
+func (f *FileStorage) WriteStats(stats Stats, configHash string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// TODO: refactor output for file_storage
 	var output strings.Builder
 	output.WriteString(fmt.Sprintf("Stats %d: %s\n", stats.Published/1000, stats.Timestamp.Format(time.RFC3339)))
 	output.WriteString(" Publishers:\n")
@@ -81,15 +81,17 @@ func (f *FileStorage) WriteStats(stats Stats) error {
 	return err
 }
 
-func (f *FileStorage) WriteFailure(stats Stats) error {
+func (f *FileStorage) WriteFailure(stats Stats, configHash string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// TODO: refactor output for file_storage
 	var output strings.Builder
 	output.WriteString(fmt.Sprintf("Stats Failure: %s\n", stats.Timestamp.Format(time.RFC3339)))
 
 	if len(stats.Errors) > 0 {
 		output.WriteString(fmt.Sprintf(" Error: %v\n", stats.Errors[0]))
+		output.WriteString(" Context: NATS connection error\n")
 		output.WriteString(" Logs:\n")
 		for i, err := range stats.Errors {
 			if i >= 10 {
@@ -110,4 +112,29 @@ func (f *FileStorage) Close() error {
 	defer f.mu.Unlock()
 
 	return f.file.Close()
+}
+
+func (f *FileStorage) GetConfigs(hashFilter string) ([]ConfigEntry, error) {
+	// File storage doesn't support efficient read operations
+	// Users should use BadgerDB for read-heavy workloads
+	return nil, fmt.Errorf("GetConfigs not supported for file storage - use BadgerDB instead")
+}
+
+func (f *FileStorage) GetStats(configHashFilter string, limit int, since *time.Time) ([]StatsEntry, error) {
+	// File storage doesn't support efficient read operations
+	// Users should use BadgerDB for read-heavy workloads
+	return nil, fmt.Errorf("GetStats not supported for file storage - use BadgerDB instead")
+}
+
+func (f *FileStorage) GetFailures(configHashFilter string, limit int, since *time.Time) ([]StatsEntry, error) {
+	// File storage doesn't support efficient read operations
+	// Users should use BadgerDB for read-heavy workloads
+	return nil, fmt.Errorf("GetFailures not supported for file storage - use BadgerDB instead")
+}
+
+func (f *FileStorage) WriteStatsHistory(statsHistory []Stats, configHash string) error {
+	// For file storage, we don't need to rewrite the entire history
+	// The rolling window is maintained in memory and individual stats are written as they come
+	// This method is a no-op for file storage to satisfy the interface
+	return nil
 }
