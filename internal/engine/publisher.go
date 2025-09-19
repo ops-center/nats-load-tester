@@ -75,15 +75,12 @@ func (p *Publisher) Start(ctx context.Context) error {
 	defer ticker.Stop()
 
 	var burstSize int
-	var burstTicker *time.Ticker
-
 	if p.config.PublishPattern == "burst" {
 		burstSize = max(p.currentRate/10, 1)
-		burstTicker = time.NewTicker(100 * time.Millisecond)
-		defer burstTicker.Stop()
 	}
+	randomDelay := time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(p.currentRate)
+	time.Sleep(randomDelay)
 
-	// Track last rate update to adjust ticker
 	lastRate := p.currentRate
 
 	for {
@@ -94,10 +91,14 @@ func (p *Publisher) Start(ctx context.Context) error {
 			interval = time.Second / time.Duration(p.currentRate)
 			ticker = time.NewTicker(interval)
 
-			// Also update burst size if using burst pattern
 			if p.config.PublishPattern == "burst" {
 				burstSize = max(p.currentRate/10, 1)
 			}
+		}
+
+		if p.currentRate > 0 && p.config.PublishPattern == "random" {
+			ticker.Stop()
+			ticker = time.NewTicker(time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(p.currentRate))
 		}
 
 		select {
@@ -106,37 +107,29 @@ func (p *Publisher) Start(ctx context.Context) error {
 			return nil
 
 		case <-ticker.C:
-			if p.config.PublishPattern == "steady" {
+			switch p.config.PublishPattern {
+			case "steady":
 				if err := p.publishMessage(); err != nil {
 					p.logger.Error("Failed to publish", zap.Error(err))
 					p.statsCollector.RecordPublishError(err)
 				}
-			}
-
-		case <-func() <-chan time.Time {
-			if burstTicker != nil {
-				return burstTicker.C
-			}
-			return nil
-		}():
-			if p.config.PublishPattern == "burst" {
+			case "burst":
 				for i := 0; i < burstSize; i++ {
 					if err := p.publishMessage(); err != nil {
 						p.logger.Error("Failed to publish", zap.Error(err))
 						p.statsCollector.RecordPublishError(err)
 					}
 				}
+			case "random":
+				if err := p.publishMessage(); err != nil {
+					p.logger.Error("Failed to publish", zap.Error(err))
+					p.statsCollector.RecordPublishError(err)
+				}
+			default:
+				return fmt.Errorf("unknown publish pattern: %s", p.config.PublishPattern)
 			}
 		}
 
-		if p.config.PublishPattern == "random" {
-			randomDelay := time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(p.currentRate)
-			time.Sleep(randomDelay)
-			if err := p.publishMessage(); err != nil {
-				p.logger.Error("Failed to publish", zap.Error(err))
-				p.statsCollector.RecordPublishError(err)
-			}
-		}
 	}
 }
 

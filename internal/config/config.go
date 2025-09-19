@@ -115,11 +115,11 @@ func (c *Config) Validate() error {
 	}
 
 	if c.Storage.Type == "" {
-		c.Storage.Type = "file"
+		c.Storage.Type = "badger"
 	}
 
 	if c.Storage.Path == "" {
-		c.Storage.Path = "./load_test_stats.log"
+		c.Storage.Path = "./load_test_stats.db"
 	}
 
 	if c.StatsCollectionIntervalSeconds <= 0 {
