@@ -19,7 +19,7 @@ type Engine struct {
 	statsCollector *stats.Collector
 	nc             *nats.Conn
 	js             nats.JetStreamContext
-	loadTestParams *config.LoadTestSpec
+	loadTestSpec   *config.LoadTestSpec
 	publishers     []*Publisher
 	consumers      []*Consumer
 	cancel         context.CancelFunc
@@ -35,19 +35,19 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector) *Engine {
 	}
 }
 
-func (e *Engine) Start(ctx context.Context, cfg config.LoadTestSpec, statsInterval time.Duration) error {
+func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, statsInterval time.Duration) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	e.statsCollector.Start(ctx, statsInterval)
-	e.logger.Info("Starting engine with configuration", zap.String("name", cfg.Name))
+	e.logger.Info("Starting engine with load test spec", zap.String("name", loadTestSpec.Name))
 
-	if err := e.connect(cfg); err != nil {
+	if err := e.connect(loadTestSpec); err != nil {
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
-	e.loadTestParams = &cfg
-	if err := e.statsCollector.SetConfig(cfg); err != nil {
+	e.loadTestSpec = loadTestSpec
+	if err := e.statsCollector.SetConfig(loadTestSpec); err != nil {
 		return fmt.Errorf("failed to set stats collector config: %w", err)
 	}
 
@@ -57,22 +57,22 @@ func (e *Engine) Start(ctx context.Context, cfg config.LoadTestSpec, statsInterv
 	// Create errgroup with context
 	e.eg, engineCtx = errgroup.WithContext(engineCtx)
 
-	if cfg.UseJetStream {
-		if err := e.setupStreams(cfg); err != nil {
+	if loadTestSpec.UseJetStream {
+		if err := e.setupStreams(loadTestSpec); err != nil {
 			e.cleanup()
 			return fmt.Errorf("failed to setup streams: %w", err)
 		}
 	}
 
-	e.startPublishers(engineCtx, cfg)
+	e.startPublishers(engineCtx, loadTestSpec)
 
-	if err := e.startConsumers(engineCtx, cfg); err != nil {
+	if err := e.startConsumers(engineCtx, loadTestSpec); err != nil {
 		e.cleanup()
 		return fmt.Errorf("failed to start consumers: %w", err)
 	}
 
 	e.eg.Go(func() error {
-		return e.startRampUp(engineCtx, cfg)
+		return e.startRampUp(engineCtx, loadTestSpec)
 	})
 
 	return nil
@@ -98,9 +98,9 @@ func (e *Engine) Stop() error {
 	return err
 }
 
-func (e *Engine) connect(cfg config.LoadTestSpec) error {
+func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 	opts := []nats.Option{
-		nats.Name(cfg.ClientIDPrefix + "-engine"),
+		nats.Name(loadTestSpec.ClientIDPrefix + "-engine"),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
@@ -115,18 +115,18 @@ func (e *Engine) connect(cfg config.LoadTestSpec) error {
 		}),
 	}
 
-	if cfg.NATSCredsFile != "" {
-		opts = append(opts, nats.UserCredentials(cfg.NATSCredsFile))
+	if loadTestSpec.NATSCredsFile != "" {
+		opts = append(opts, nats.UserCredentials(loadTestSpec.NATSCredsFile))
 	}
 
-	nc, err := nats.Connect(cfg.NATSURL, opts...)
+	nc, err := nats.Connect(loadTestSpec.NATSURL, opts...)
 	if err != nil {
 		return err
 	}
 
 	e.nc = nc
 
-	if cfg.UseJetStream {
+	if loadTestSpec.UseJetStream {
 		js, err := nc.JetStream()
 		if err != nil {
 			nc.Close()
@@ -138,20 +138,20 @@ func (e *Engine) connect(cfg config.LoadTestSpec) error {
 	return nil
 }
 
-func (e *Engine) setupStreams(cfg config.LoadTestSpec) error {
-	for _, streamCfg := range cfg.Streams {
-		for i := 0; i < streamCfg.Count; i++ {
-			streamName := fmt.Sprintf("%s_%d", streamCfg.NamePrefix, i+1)
+func (e *Engine) setupStreams(loadTestSpec *config.LoadTestSpec) error {
+	for _, loadTestSpecStream := range loadTestSpec.Streams {
+		for i := 0; i < loadTestSpecStream.Count; i++ {
+			streamName := fmt.Sprintf("%s_%d", loadTestSpecStream.NamePrefix, i+1)
 
-			subjects := make([]string, len(streamCfg.Subjects))
-			for j, subject := range streamCfg.Subjects {
+			subjects := make([]string, len(loadTestSpecStream.Subjects))
+			for j, subject := range loadTestSpecStream.Subjects {
 				subjects[j] = fmt.Sprintf(subject, i+1)
 			}
 
 			streamConfig := &nats.StreamConfig{
 				Name:     streamName,
 				Subjects: subjects,
-				Replicas: streamCfg.Replicas,
+				Replicas: loadTestSpecStream.Replicas,
 				Storage:  nats.FileStorage,
 			}
 
@@ -179,21 +179,21 @@ func (e *Engine) setupStreams(cfg config.LoadTestSpec) error {
 	return nil
 }
 
-func (e *Engine) startPublishers(ctx context.Context, cfg config.LoadTestSpec) {
-	for _, streamCfg := range cfg.Streams {
-		for i := 0; i < streamCfg.Count; i++ {
-			streamName := fmt.Sprintf("%s_%d", streamCfg.NamePrefix, i+1)
+func (e *Engine) startPublishers(ctx context.Context, loadTestSpec *config.LoadTestSpec) {
+	for _, loadTestSpecStream := range loadTestSpec.Streams {
+		for i := 0; i < loadTestSpecStream.Count; i++ {
+			streamName := fmt.Sprintf("%s_%d", loadTestSpecStream.NamePrefix, i+1)
 
-			for j := 0; j < cfg.Publishers.CountPerStream; j++ {
+			for j := 0; j < loadTestSpec.Publishers.CountPerStream; j++ {
 				pubCfg := PublisherConfig{
-					ID:             fmt.Sprintf("%s-pub-%d-%d", cfg.ClientIDPrefix, i+1, j+1),
+					ID:             fmt.Sprintf("%s-pub-%d-%d", loadTestSpec.ClientIDPrefix, i+1, j+1),
 					StreamName:     streamName,
-					Subject:        fmt.Sprintf(streamCfg.Subjects[0], i+1),
-					MessageSize:    cfg.Publishers.MessageSizeBytes,
-					PublishRate:    cfg.Publishers.PublishRatePerSecond,
-					TrackLatency:   cfg.Publishers.TrackLatency,
-					PublishPattern: streamCfg.PublishPattern,
-					UseJetStream:   cfg.UseJetStream,
+					Subject:        fmt.Sprintf(loadTestSpecStream.Subjects[0], i+1),
+					MessageSize:    loadTestSpec.Publishers.MessageSizeBytes,
+					PublishRate:    loadTestSpec.Publishers.PublishRatePerSecond,
+					TrackLatency:   loadTestSpec.Publishers.TrackLatency,
+					PublishPattern: loadTestSpecStream.PublishPattern,
+					UseJetStream:   loadTestSpec.UseJetStream,
 				}
 
 				pub := NewPublisher(e.nc, e.js, pubCfg, e.statsCollector, e.logger)
@@ -215,25 +215,25 @@ func (e *Engine) startPublishers(ctx context.Context, cfg config.LoadTestSpec) {
 	}
 }
 
-func (e *Engine) startConsumers(ctx context.Context, cfg config.LoadTestSpec) error {
+func (e *Engine) startConsumers(ctx context.Context, loadTestSpec *config.LoadTestSpec) error {
 	consumerStartErrGroup := &errgroup.Group{}
 
-	for _, streamCfg := range cfg.Streams {
-		for i := 0; i < streamCfg.Count; i++ {
-			streamName := fmt.Sprintf("%s_%d", streamCfg.NamePrefix, i+1)
+	for _, loadTestSpecStream := range loadTestSpec.Streams {
+		for i := 0; i < loadTestSpecStream.Count; i++ {
+			streamName := fmt.Sprintf("%s_%d", loadTestSpecStream.NamePrefix, i+1)
 
-			for j := 0; j < cfg.Consumers.CountPerStream; j++ {
+			for j := 0; j < loadTestSpec.Consumers.CountPerStream; j++ {
 				consCfg := ConsumerConfig{
-					ID:             fmt.Sprintf("%s-con-%d-%d", cfg.ClientIDPrefix, i+1, j+1),
+					ID:             fmt.Sprintf("%s-con-%d-%d", loadTestSpec.ClientIDPrefix, i+1, j+1),
 					StreamName:     streamName,
-					DurableName:    fmt.Sprintf("%s_%d_%d", cfg.Consumers.DurableNamePrefix, i+1, j+1),
-					Type:           cfg.Consumers.Type,
-					AckWaitSeconds: cfg.Consumers.AckWaitSeconds,
-					MaxAckPending:  cfg.Consumers.MaxAckPending,
-					ConsumeDelayMs: cfg.Consumers.ConsumeDelayMs,
-					AckPolicy:      cfg.Consumers.AckPolicy,
-					UseJetStream:   cfg.UseJetStream,
-					Subject:        fmt.Sprintf(streamCfg.Subjects[0], i+1),
+					DurableName:    fmt.Sprintf("%s_%d_%d", loadTestSpec.Consumers.DurableNamePrefix, i+1, j+1),
+					Type:           loadTestSpec.Consumers.Type,
+					AckWaitSeconds: loadTestSpec.Consumers.AckWaitSeconds,
+					MaxAckPending:  loadTestSpec.Consumers.MaxAckPending,
+					ConsumeDelayMs: loadTestSpec.Consumers.ConsumeDelayMs,
+					AckPolicy:      loadTestSpec.Consumers.AckPolicy,
+					UseJetStream:   loadTestSpec.UseJetStream,
+					Subject:        fmt.Sprintf(loadTestSpecStream.Subjects[0], i+1),
 				}
 
 				cons := NewConsumer(e.nc, e.js, consCfg, e.statsCollector, e.logger)
@@ -270,8 +270,8 @@ func (e *Engine) startConsumers(ctx context.Context, cfg config.LoadTestSpec) er
 	return nil
 }
 
-func (e *Engine) startRampUp(ctx context.Context, cfg config.LoadTestSpec) error {
-	rampUpDuration := cfg.RampUpDuration()
+func (e *Engine) startRampUp(ctx context.Context, loadTestSpec *config.LoadTestSpec) error {
+	rampUpDuration := loadTestSpec.RampUpDuration()
 	rampUpStart := time.Now()
 
 	if rampUpDuration == 0 {

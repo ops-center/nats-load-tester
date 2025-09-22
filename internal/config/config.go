@@ -8,10 +8,10 @@ import (
 )
 
 type Config struct {
-	LoadTestSpecs                  []LoadTestSpec `json:"load_test_specs"`
-	RepeatPolicy                   RepeatPolicy   `json:"repeat_policy"`
-	Storage                        Storage        `json:"storage"`
-	StatsCollectionIntervalSeconds int64          `json:"stats_collection_interval_seconds"`
+	LoadTestSpecs                  []*LoadTestSpec `json:"load_test_specs"`
+	RepeatPolicy                   RepeatPolicy    `json:"repeat_policy"`
+	Storage                        Storage         `json:"storage"`
+	StatsCollectionIntervalSeconds int64           `json:"stats_collection_interval_seconds"`
 }
 
 type LoadTestSpec struct {
@@ -128,38 +128,38 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func (c *LoadTestSpec) Validate() error {
-	if c.Name == "" {
+func (lts *LoadTestSpec) Validate() error {
+	if lts.Name == "" {
 		return fmt.Errorf("name required")
 	}
 
-	if c.NATSURL == "" {
+	if lts.NATSURL == "" {
 		return fmt.Errorf("nats_url required")
 	}
 
-	if c.ClientIDPrefix == "" {
-		c.ClientIDPrefix = "load-tester"
+	if lts.ClientIDPrefix == "" {
+		lts.ClientIDPrefix = "load-tester"
 	}
 
-	if len(c.Streams) == 0 {
+	if len(lts.Streams) == 0 {
 		return fmt.Errorf("at least one stream configuration required")
 	}
 
-	for i, stream := range c.Streams {
+	for i, stream := range lts.Streams {
 		if err := stream.Validate(); err != nil {
 			return fmt.Errorf("stream %d: %w", i, err)
 		}
 	}
 
-	if err := c.Publishers.Validate(); err != nil {
+	if err := lts.Publishers.Validate(); err != nil {
 		return fmt.Errorf("publishers: %w", err)
 	}
 
-	if err := c.Consumers.Validate(); err != nil {
+	if err := lts.Consumers.Validate(); err != nil {
 		return fmt.Errorf("consumers: %w", err)
 	}
 
-	if err := c.Behavior.Validate(); err != nil {
+	if err := lts.Behavior.Validate(); err != nil {
 		return fmt.Errorf("behavior: %w", err)
 	}
 
@@ -275,39 +275,39 @@ func (c *Config) Equals(otherCfg *Config) bool {
 	return c.Hash() == otherCfg.Hash()
 }
 
-func (c *LoadTestSpec) Hash() string {
-	data, _ := json.Marshal(c)
+func (lts *LoadTestSpec) Hash() string {
+	data, _ := json.Marshal(lts)
 	h := sha256.Sum256(data)
 	return fmt.Sprintf("%x", h)
 }
 
-func (c *LoadTestSpec) ApplyMultipliers(rp RepeatPolicy) {
-	for i := range c.Streams {
-		c.Streams[i].Count = int(float64(c.Streams[i].Count) * rp.Streams.CountMultiplier)
-		c.Streams[i].Replicas = int(float64(c.Streams[i].Replicas) * rp.Streams.ReplicasMultiplier)
-		c.Streams[i].MessagesPerStreamPerSecond = int64(float64(c.Streams[i].MessagesPerStreamPerSecond) * rp.Streams.MessagesPerStreamPerSecondMultiplier)
+func (lts *LoadTestSpec) ApplyMultipliers(rp RepeatPolicy) {
+	for i := range lts.Streams {
+		lts.Streams[i].Count = int(float64(lts.Streams[i].Count) * rp.Streams.CountMultiplier)
+		lts.Streams[i].Replicas = int(float64(lts.Streams[i].Replicas) * rp.Streams.ReplicasMultiplier)
+		lts.Streams[i].MessagesPerStreamPerSecond = int64(float64(lts.Streams[i].MessagesPerStreamPerSecond) * rp.Streams.MessagesPerStreamPerSecondMultiplier)
 	}
 
-	c.Behavior.DurationSeconds = int64(float64(c.Behavior.DurationSeconds) * rp.Behavior.DurationMultiplier)
-	c.Behavior.RampUpSeconds = int64(float64(c.Behavior.RampUpSeconds) * rp.Behavior.RampUpMultiplier)
+	lts.Behavior.DurationSeconds = int64(float64(lts.Behavior.DurationSeconds) * rp.Behavior.DurationMultiplier)
+	lts.Behavior.RampUpSeconds = int64(float64(lts.Behavior.RampUpSeconds) * rp.Behavior.RampUpMultiplier)
 
-	c.Consumers.AckWaitSeconds = int64(float64(c.Consumers.AckWaitSeconds) * rp.Consumers.AckWaitMultiplier)
-	c.Consumers.MaxAckPending = int(float64(c.Consumers.MaxAckPending) * rp.Consumers.MaxAckPendingMultiplier)
-	c.Consumers.ConsumeDelayMs = int64(float64(c.Consumers.ConsumeDelayMs) * rp.Consumers.ConsumeDelayMultiplier)
+	lts.Consumers.AckWaitSeconds = int64(float64(lts.Consumers.AckWaitSeconds) * rp.Consumers.AckWaitMultiplier)
+	lts.Consumers.MaxAckPending = int(float64(lts.Consumers.MaxAckPending) * rp.Consumers.MaxAckPendingMultiplier)
+	lts.Consumers.ConsumeDelayMs = int64(float64(lts.Consumers.ConsumeDelayMs) * rp.Consumers.ConsumeDelayMultiplier)
 
-	c.Publishers.CountPerStream = int(float64(c.Publishers.CountPerStream) * rp.Publishers.CountPerStreamMultiplier)
-	c.Publishers.PublishRatePerSecond = int(float64(c.Publishers.PublishRatePerSecond) * rp.Publishers.PublishRateMultiplier)
-	c.Publishers.MessageSizeBytes = int(float64(c.Publishers.MessageSizeBytes) * rp.Publishers.MessageSizeBytesMultiplier)
+	lts.Publishers.CountPerStream = int(float64(lts.Publishers.CountPerStream) * rp.Publishers.CountPerStreamMultiplier)
+	lts.Publishers.PublishRatePerSecond = int(float64(lts.Publishers.PublishRatePerSecond) * rp.Publishers.PublishRateMultiplier)
+	lts.Publishers.MessageSizeBytes = int(float64(lts.Publishers.MessageSizeBytes) * rp.Publishers.MessageSizeBytesMultiplier)
 }
 
 func (c *Config) StatsInterval() time.Duration {
 	return time.Duration(c.StatsCollectionIntervalSeconds) * time.Second
 }
 
-func (c *LoadTestSpec) Duration() time.Duration {
-	return time.Duration(c.Behavior.DurationSeconds) * time.Second
+func (lts *LoadTestSpec) Duration() time.Duration {
+	return time.Duration(lts.Behavior.DurationSeconds) * time.Second
 }
 
-func (c *LoadTestSpec) RampUpDuration() time.Duration {
-	return time.Duration(c.Behavior.RampUpSeconds) * time.Second
+func (lts *LoadTestSpec) RampUpDuration() time.Duration {
+	return time.Duration(lts.Behavior.RampUpSeconds) * time.Second
 }

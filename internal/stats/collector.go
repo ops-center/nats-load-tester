@@ -15,7 +15,7 @@ import (
 type Collector struct {
 	mu            sync.RWMutex
 	logger        *zap.Logger
-	loadTestSpec  config.LoadTestSpec
+	loadTestSpec  *config.LoadTestSpec
 	storage       Storage
 	published     atomic.Uint64
 	consumed      atomic.Uint64
@@ -29,7 +29,7 @@ type Collector struct {
 	lastStatsTime time.Time
 
 	// Configuration hash tracking for hot reloading
-	currentConfigHash string
+	currentLoadTestSpecHash string
 
 	// Ramp-up tracking
 	rampUpActive   bool
@@ -80,19 +80,13 @@ func NewCollector(logger *zap.Logger, storage Storage) *Collector {
 	}
 }
 
-func (c *Collector) SetConfig(cfg config.LoadTestSpec) error {
+func (c *Collector) SetConfig(loadTestSpec *config.LoadTestSpec) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Set current configuration hash for tracking
-	c.currentConfigHash = cfg.Hash()
-	c.loadTestSpec = cfg
-	c.Reset()
+	c.currentLoadTestSpecHash = loadTestSpec.Hash()
+	c.loadTestSpec = loadTestSpec
 
-	return nil
-}
-
-func (c *Collector) Reset() {
 	c.published.Store(0)
 	c.consumed.Store(0)
 	c.publishErrors.Store(0)
@@ -101,23 +95,34 @@ func (c *Collector) Reset() {
 	c.errors = c.errors[:0]
 	c.startTime = time.Now()
 	c.lastStatsTime = time.Now()
+
+	return nil
 }
 
 func (c *Collector) RecordPublish() {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	c.published.Add(1)
 }
 
 func (c *Collector) RecordPublishError(err error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	c.publishErrors.Add(1)
 	c.recordError(err)
 }
 
 func (c *Collector) RecordConsume() {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	c.consumed.Add(1)
 }
 
 func (c *Collector) RecordConsumeError(err error) {
+	c.mu.RLock()
 	c.consumeErrors.Add(1)
+	c.mu.RUnlock()
+
 	c.recordError(err)
 }
 
@@ -157,6 +162,9 @@ func (c *Collector) RecordLatency(latency time.Duration) {
 }
 
 func (c *Collector) CollectStats() Stats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	now := time.Now()
 	duration := now.Sub(c.lastStatsTime).Seconds()
 
@@ -175,26 +183,22 @@ func (c *Collector) CollectStats() Stats {
 
 	stats.PendingMessages = int64(stats.Published) - int64(stats.Consumed)
 
-	c.latencyMu.Lock()
 	if len(c.latencies) > 0 {
 		stats.Latency = c.calculateLatencyStats(c.latencies)
 		c.latencies = c.latencies[:0]
 	}
-	c.latencyMu.Unlock()
 
-	c.errorsMu.Lock()
 	stats.Errors = make([]error, len(c.errors))
 	copy(stats.Errors, c.errors)
 	c.errors = c.errors[:0]
-	c.errorsMu.Unlock()
 
 	stats.RampUp = c.getRampUpStats(now)
 
 	c.lastStatsTime = now
 
 	// Write individual stats directly to storage (no in-memory cache)
-	if c.currentConfigHash != "" && c.storage != nil {
-		if err := c.storage.WriteStats(stats, c.currentConfigHash); err != nil {
+	if c.currentLoadTestSpecHash != "" && c.storage != nil {
+		if err := c.storage.WriteStats(stats, c.currentLoadTestSpecHash); err != nil {
 			c.logger.Error("Failed to write stats", zap.Error(err))
 		}
 	}
@@ -247,8 +251,9 @@ func (c *Collector) Start(ctx context.Context, statsInterval time.Duration) {
 
 func (c *Collector) GetHistory() []Stats {
 	c.mu.RLock()
-	configHash := c.currentConfigHash
-	c.mu.RUnlock()
+	defer c.mu.RUnlock()
+
+	configHash := c.currentLoadTestSpecHash
 
 	if configHash == "" || c.storage == nil {
 		return []Stats{}
@@ -270,8 +275,9 @@ func (c *Collector) GetHistory() []Stats {
 
 func (c *Collector) WriteFailure(err error) {
 	c.mu.RLock()
-	configHash := c.currentConfigHash
-	c.mu.RUnlock()
+	defer c.mu.RUnlock()
+
+	configHash := c.currentLoadTestSpecHash
 
 	failureStats := Stats{
 		Timestamp: time.Now(),
@@ -300,9 +306,6 @@ func (c *Collector) SetRampUpStatus(active bool, start time.Time, duration time.
 
 // getRampUpStats calculates current ramp-up statistics
 func (c *Collector) getRampUpStats(now time.Time) RampUpStats {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	if !c.rampUpActive {
 		return RampUpStats{IsActive: false}
 	}

@@ -171,7 +171,7 @@ func processConfig(
 	logger *zap.Logger,
 ) error {
 	// returns true if no further call should be made. e.g; upon engine failure
-	processLoadTestSpec := func(spec config.LoadTestSpec, specName string) (bool, error) {
+	processLoadTestSpec := func(spec *config.LoadTestSpec, specName string) (bool, error) {
 		engineCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
