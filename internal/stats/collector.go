@@ -198,7 +198,7 @@ func (c *Collector) CollectStats() Stats {
 
 	// Write individual stats directly to storage (no in-memory cache)
 	if c.currentLoadTestSpecHash != "" && c.storage != nil {
-		if err := c.storage.WriteStats(stats, c.currentLoadTestSpecHash); err != nil {
+		if err := c.storage.WriteStats(c.loadTestSpec, stats); err != nil {
 			c.logger.Error("Failed to write stats", zap.Error(err))
 		}
 	}
@@ -241,15 +241,16 @@ func (c *Collector) Start(ctx context.Context, statsInterval time.Duration) {
 	for {
 		select {
 		case <-ctx.Done():
+			c.CollectStats()
 			return
 		case <-ticker.C:
-			c.CollectStats()
 			// Stats are automatically written to storage in CollectStats()
+			c.CollectStats()
 		}
 	}
 }
 
-func (c *Collector) GetHistory() []Stats {
+func (c *Collector) GetHistory(limit int) []Stats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -259,8 +260,7 @@ func (c *Collector) GetHistory() []Stats {
 		return []Stats{}
 	}
 
-	// Read from storage instead of in-memory cache
-	entries, err := c.storage.GetStats(configHash, 10, nil) // Last 10 stats
+	entries, err := c.storage.GetStats(c.loadTestSpec, limit, nil) // Last 10 stats
 	if err != nil {
 		c.logger.Error("Failed to get stats history from storage", zap.Error(err))
 		return []Stats{}
@@ -286,7 +286,7 @@ func (c *Collector) WriteFailure(err error) {
 
 	// Write failure directly to storage (no in-memory cache)
 	if configHash != "" && c.storage != nil {
-		if writeErr := c.storage.WriteFailure(failureStats, configHash); writeErr != nil {
+		if writeErr := c.storage.WriteFailure(c.loadTestSpec, failureStats); writeErr != nil {
 			c.logger.Error("Failed to write failure stats", zap.Error(writeErr))
 		}
 	}

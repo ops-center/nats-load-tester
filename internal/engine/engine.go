@@ -43,6 +43,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	e.logger.Info("Starting engine with load test spec", zap.String("name", loadTestSpec.Name))
 
 	if err := e.connect(loadTestSpec); err != nil {
+		e.statsCollector.WriteFailure(err)
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 

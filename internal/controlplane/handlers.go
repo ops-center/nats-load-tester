@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"go.bytebuilders.dev/nats-load-tester/internal/config"
@@ -81,7 +82,7 @@ func (h *HTTPServer) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (h *HTTPServer) handleCheckHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]string{
 		"status": "healthy",
@@ -92,14 +93,24 @@ func (h *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *HTTPServer) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
+func (h *HTTPServer) handleGetStatsHistory(w http.ResponseWriter, r *http.Request) {
 	collector := h.getCollector()
 	if collector == nil {
 		http.Error(w, "Stats collector not available", http.StatusServiceUnavailable)
 		return
 	}
 
-	history := collector.GetHistory()
+	limit := 0
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsedLimit, err := strconv.Atoi(limitStr); err == nil {
+			limit = parsedLimit
+		} else {
+			http.Error(w, "Invalid limit parameter", http.StatusBadRequest)
+			h.logger.Error("invalid limit parameter", zap.String("limit", limitStr), zap.Error(err))
+		}
+	}
+
+	history := collector.GetHistory(limit)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(history); err != nil {

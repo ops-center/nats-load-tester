@@ -8,15 +8,11 @@ import (
 
 type Storage interface {
 	// Write methods
-	WriteConfigInfo(cfg *config.Config, hash string) error
-	WriteStats(stats Stats, configHash string) error
-	WriteFailure(stats Stats, configHash string) error
-	WriteStatsHistory(statsHistory []Stats, configHash string) error
+	WriteStats(loadTestSpec *config.LoadTestSpec, stats Stats) error
+	WriteFailure(loadTestSpec *config.LoadTestSpec, stats Stats) error
 
 	// Read methods - general purpose with optional filters
-	GetConfigs(hashFilter string) ([]ConfigEntry, error)
-	GetStats(configHashFilter string, limit int, since *time.Time) ([]StatsEntry, error)
-	GetFailures(configHashFilter string, limit int, since *time.Time) ([]StatsEntry, error)
+	GetStats(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error)
 
 	Close() error
 }

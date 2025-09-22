@@ -1,140 +1,282 @@
 package stats
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"go.bytebuilders.dev/nats-load-tester/internal/config"
+	"go.uber.org/zap"
 )
 
 type FileStorage struct {
-	mu       sync.Mutex
-	file     *os.File
-	filepath string
+	mu            sync.RWMutex
+	filepath      string
+	file          *os.File
+	statsCache    map[string][]StatsEntry
+	failuresCache map[string][]StatsEntry
+	maxEntries    int
+	logger        *zap.Logger
 }
 
-func NewFileStorage(filepath string) (*FileStorage, error) {
-	file, err := os.OpenFile(filepath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+type persistedEntry struct {
+	Type       string    `json:"type"`
+	ConfigHash string    `json:"config_hash"`
+	Timestamp  time.Time `json:"timestamp"`
+	Stats      Stats     `json:"stats"`
+}
+
+func NewFileStorage(filepath string, logger *zap.Logger) (*FileStorage, error) {
+	if logger == nil {
+		return nil, fmt.Errorf("logger cannot be nil")
+	}
+	fs := &FileStorage{
+		filepath:      filepath,
+		statsCache:    make(map[string][]StatsEntry),
+		failuresCache: make(map[string][]StatsEntry),
+		logger:        logger,
+		maxEntries:    10,
+	}
+
+	// Open file handle first, then load existing data
+	file, err := os.OpenFile(filepath, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
+	fs.file = file
 
-	return &FileStorage{
-		file:     file,
-		filepath: filepath,
-	}, nil
-}
-
-func (f *FileStorage) WriteConfigInfo(cfg *config.Config, hash string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	configJSON, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	output := fmt.Sprintf(`--------------------------------------------------------------------------------
-Configuration Info: %s
-Hash: %s
-Config: %s
---------------------------------------------------------------------------------
-
-`, time.Now().Format(time.RFC3339), hash, string(configJSON))
-
-	_, err = f.file.WriteString(output)
-	return err
-}
-
-func (f *FileStorage) WriteStats(stats Stats, configHash string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// TODO: refactor output for file_storage
-	var output strings.Builder
-	output.WriteString(fmt.Sprintf("Stats %d: %s\n", stats.Published/1000, stats.Timestamp.Format(time.RFC3339)))
-	output.WriteString(" Publishers:\n")
-	output.WriteString(fmt.Sprintf("   - Total Published: %d\n", stats.Published))
-	output.WriteString(fmt.Sprintf("   - Publish Rate (msg/s): %.1f\n", stats.PublishRate))
-	output.WriteString(fmt.Sprintf("   - Errors: %d\n", stats.PublishErrors))
-	output.WriteString(" Consumers:\n")
-	output.WriteString(fmt.Sprintf("   - Total Consumed: %d\n", stats.Consumed))
-	output.WriteString(fmt.Sprintf("   - Ack Rate (msg/s): %.1f\n", stats.ConsumeRate))
-	output.WriteString(fmt.Sprintf("   - Pending Messages: %d\n", stats.PendingMessages))
-	output.WriteString(fmt.Sprintf("   - Errors: %d\n", stats.ConsumeErrors))
-
-	if stats.Latency.Count > 0 {
-		output.WriteString(" Latency (ms):\n")
-		output.WriteString(fmt.Sprintf("   - Min: %s\n", FormatLatency(stats.Latency.Min)))
-		output.WriteString(fmt.Sprintf("   - Mean: %s\n", FormatLatency(stats.Latency.Mean)))
-		output.WriteString(fmt.Sprintf("   - Max: %s\n", FormatLatency(stats.Latency.Max)))
-		output.WriteString(fmt.Sprintf("   - 99th Percentile: %s\n", FormatLatency(stats.Latency.P99)))
-	}
-
-	output.WriteString("\n")
-
-	_, err := f.file.WriteString(output.String())
-	return err
-}
-
-func (f *FileStorage) WriteFailure(stats Stats, configHash string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// TODO: refactor output for file_storage
-	var output strings.Builder
-	output.WriteString(fmt.Sprintf("Stats Failure: %s\n", stats.Timestamp.Format(time.RFC3339)))
-
-	if len(stats.Errors) > 0 {
-		output.WriteString(fmt.Sprintf(" Error: %v\n", stats.Errors[0]))
-		output.WriteString(" Context: NATS connection error\n")
-		output.WriteString(" Logs:\n")
-		for i, err := range stats.Errors {
-			if i >= 10 {
-				break
-			}
-			output.WriteString(fmt.Sprintf("   - [ERROR] %v\n", err))
+	if err := fs.loadFromFile(); err != nil {
+		if closeErr := fs.file.Close(); closeErr != nil {
+			logger.Warn("failed to close file after load error", zap.Error(closeErr))
 		}
+		return nil, fmt.Errorf("failed to load existing data: %w", err)
 	}
 
-	output.WriteString("\n")
+	return fs, nil
+}
 
-	_, err := f.file.WriteString(output.String())
-	return err
+func (f *FileStorage) WriteStats(loadTestSpec *config.LoadTestSpec, stats Stats) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	configHash := loadTestSpec.Hash()
+	entry := StatsEntry{
+		ConfigHash: configHash,
+		Timestamp:  stats.Timestamp,
+		Stats:      stats,
+	}
+
+	f.addToCache(f.statsCache, configHash, entry)
+
+	return f.rewriteEntireFile()
+}
+
+func (f *FileStorage) WriteFailure(loadTestSpec *config.LoadTestSpec, stats Stats) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	configHash := loadTestSpec.Hash()
+	entry := StatsEntry{
+		ConfigHash: configHash,
+		Timestamp:  stats.Timestamp,
+		Stats:      stats,
+	}
+
+	f.addToCache(f.failuresCache, configHash, entry)
+
+	return f.rewriteEntireFile()
+}
+
+func (f *FileStorage) GetStats(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	configHash := loadTestSpec.Hash()
+	entries, exists := f.statsCache[configHash]
+	if !exists {
+		return []StatsEntry{}, nil
+	}
+
+	var filtered []StatsEntry
+	for _, entry := range entries {
+		if since != nil && entry.Timestamp.Before(*since) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+
+	if limit > 0 && len(filtered) > limit {
+		start := len(filtered) - limit
+		filtered = filtered[start:]
+	}
+
+	return filtered, nil
 }
 
 func (f *FileStorage) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return f.file.Close()
-}
+	if f.file == nil {
+		return nil
+	}
+	f.logger.Info("closing file storage")
 
-func (f *FileStorage) GetConfigs(hashFilter string) ([]ConfigEntry, error) {
-	// File storage doesn't support efficient read operations
-	// Users should use BadgerDB for read-heavy workloads
-	return nil, fmt.Errorf("GetConfigs not supported for file storage - use BadgerDB instead")
-}
+	syncErr := f.file.Sync()
+	closeErr := f.file.Close()
 
-func (f *FileStorage) GetStats(configHashFilter string, limit int, since *time.Time) ([]StatsEntry, error) {
-	// File storage doesn't support efficient read operations
-	// Users should use BadgerDB for read-heavy workloads
-	return nil, fmt.Errorf("GetStats not supported for file storage - use BadgerDB instead")
-}
+	f.file = nil
 
-func (f *FileStorage) GetFailures(configHashFilter string, limit int, since *time.Time) ([]StatsEntry, error) {
-	// File storage doesn't support efficient read operations
-	// Users should use BadgerDB for read-heavy workloads
-	return nil, fmt.Errorf("GetFailures not supported for file storage - use BadgerDB instead")
-}
+	// TODO: consider handling this better instead of nested error wrapping
+	if syncErr != nil && closeErr != nil {
+		return fmt.Errorf("failed to sync file: %w", fmt.Errorf("failed to close file: %w", closeErr))
+	}
 
-func (f *FileStorage) WriteStatsHistory(statsHistory []Stats, configHash string) error {
-	// For file storage, we don't need to rewrite the entire history
-	// The rolling window is maintained in memory and individual stats are written as they come
-	// This method is a no-op for file storage to satisfy the interface
+	if syncErr != nil {
+		return fmt.Errorf("failed to sync file: %w", syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("failed to close file: %w", closeErr)
+	}
+
 	return nil
+}
+
+func (f *FileStorage) addToCache(cache map[string][]StatsEntry, configHash string, entry StatsEntry) {
+	entries := cache[configHash]
+
+	entries = append(entries, entry)
+
+	for len(entries) > f.maxEntries {
+		entries = entries[1:]
+	}
+
+	cache[configHash] = entries
+}
+
+func (f *FileStorage) rewriteEntireFile() error {
+	if f.file == nil {
+		return fmt.Errorf("file handle is not initialized")
+	}
+
+	tempFile, err := os.CreateTemp("", "stats_*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	tempFileName := tempFile.Name()
+	var tempClosed bool
+
+	defer func() {
+		if !tempClosed {
+			if err := tempFile.Close(); err != nil {
+				f.logger.Warn("failed to close temp file", zap.String("tempFile", tempFileName), zap.Error(err))
+			}
+		}
+		if err := os.Remove(tempFileName); err != nil {
+			f.logger.Warn("failed to remove temp file", zap.String("tempFile", tempFileName), zap.Error(err))
+		}
+	}()
+
+	if err := f.writeAllData(tempFile); err != nil {
+		return fmt.Errorf("failed to write to temp file: %w", err)
+	}
+
+	if err := tempFile.Sync(); err != nil {
+		return fmt.Errorf("failed to sync temp file: %w", err)
+	}
+
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+	tempClosed = true
+
+	if err := os.Rename(tempFileName, f.filepath); err != nil {
+		return fmt.Errorf("failed to replace file: %w", err)
+	}
+
+	if err := f.file.Close(); err != nil {
+		return fmt.Errorf("failed to close old file handle: %w", err)
+	}
+
+	file, err := os.OpenFile(f.filepath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		f.file = nil
+		return fmt.Errorf("failed to reopen file: %w", err)
+	}
+	f.file = file
+
+	return nil
+}
+
+func (f *FileStorage) writeAllData(file *os.File) error {
+	for configHash, entries := range f.statsCache {
+		for _, statsEntry := range entries {
+			entry := persistedEntry{
+				Type:       "stats",
+				ConfigHash: configHash,
+				Timestamp:  statsEntry.Timestamp,
+				Stats:      statsEntry.Stats,
+			}
+			data, err := json.Marshal(entry)
+			if err != nil {
+				return fmt.Errorf("failed to marshal stats entry: %w", err)
+			}
+			if _, err := file.WriteString(string(data) + "\n"); err != nil {
+				return fmt.Errorf("failed to write stats entry: %w", err)
+			}
+		}
+	}
+
+	for configHash, entries := range f.failuresCache {
+		for _, statsEntry := range entries {
+			entry := persistedEntry{
+				Type:       "failure",
+				ConfigHash: configHash,
+				Timestamp:  statsEntry.Timestamp,
+				Stats:      statsEntry.Stats,
+			}
+			data, err := json.Marshal(entry)
+			if err != nil {
+				return fmt.Errorf("failed to marshal failure entry: %w", err)
+			}
+			if _, err := file.WriteString(string(data) + "\n"); err != nil {
+				return fmt.Errorf("failed to write failure entry: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (f *FileStorage) loadFromFile() error {
+	if _, err := f.file.Seek(0, 0); err != nil {
+		return fmt.Errorf("failed to seek to beginning: %w", err)
+	}
+
+	scanner := bufio.NewScanner(f.file)
+	for scanner.Scan() {
+		var entry persistedEntry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue // Skip malformed lines
+		}
+
+		statsEntry := StatsEntry{
+			ConfigHash: entry.ConfigHash,
+			Timestamp:  entry.Timestamp,
+			Stats:      entry.Stats,
+		}
+
+		switch entry.Type {
+		case "stats":
+			f.addToCache(f.statsCache, entry.ConfigHash, statsEntry)
+		case "failure":
+			f.addToCache(f.failuresCache, entry.ConfigHash, statsEntry)
+		}
+	}
+
+	return scanner.Err()
 }

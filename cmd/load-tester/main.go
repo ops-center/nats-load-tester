@@ -130,11 +130,6 @@ func runLoadTestManager(ctx context.Context, httpServer *controlplane.HTTPServer
 				break
 			}
 
-			// Write configuration info block as per PRD
-			if err := storage.WriteConfigInfo(cfg, cfg.Hash()); err != nil {
-				logger.Error("failed to write config info", zap.Error(err))
-			}
-
 			statsCollector := stats.NewCollector(logger, storage)
 			httpServer.SetCollector(statsCollector)
 			engine := loadtest_engine.NewEngine(logger, statsCollector)
@@ -254,9 +249,9 @@ func createStorage(cfg config.Storage, logger *zap.Logger) (stats.Storage, error
 		if cfg.Path == "" {
 			cfg.Path = "./load_test_stats.log"
 		}
-		return stats.NewFileStorage(cfg.Path)
+		return stats.NewFileStorage(cfg.Path, logger)
 	case "stdout":
-		return stats.NewFileStorage("/dev/stdout")
+		return stats.NewFileStorage("/dev/stdout", logger)
 	default:
 		return nil, fmt.Errorf("unknown storage type: %s", cfg.Type)
 	}
