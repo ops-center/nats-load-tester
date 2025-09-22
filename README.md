@@ -1,4 +1,12 @@
-# NATS Load Tester
+# 🚧 TODO 🚧
+- fix the stream/publisher/consumer subjects synchronization and/or validation.
+- implement 'GetFailures()' method for reading runtime failures.
+- implement more storage persistence and query features.
+- improve performance for file storage.
+- ensure that everything actually works.
+------
+
+## NATS Load Tester
 
 A dynamically configurable load testing tool for NATS messaging systems with real-time configuration updates via HTTP API.
 
@@ -340,9 +348,9 @@ Statistics storage backend configuration with multiple options for persistence a
 **`"badger"`** - BadgerDB embedded database (default)
 - **Path**: Directory path for BadgerDB storage
 - **Format**: Structured JSON with automatic TTL and garbage collection
-- **Features**: 
+- **Features**:
   - Stats data TTL: 24 hours
-  - Config data TTL: 7 days  
+  - Config data TTL: 7 days
   - Failure data TTL: 72 hours
   - Automatic value log garbage collection
   - Singleton pattern prevents multiple database opens

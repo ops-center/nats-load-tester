@@ -7,12 +7,11 @@ import (
 )
 
 type Storage interface {
-	// Write methods
 	WriteStats(loadTestSpec *config.LoadTestSpec, stats Stats) error
 	WriteFailure(loadTestSpec *config.LoadTestSpec, stats Stats) error
 
-	// Read methods - general purpose with optional filters
 	GetStats(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error)
+	// GetFailures(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error)
 
 	Close() error
 }

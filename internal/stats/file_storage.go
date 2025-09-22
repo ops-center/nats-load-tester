@@ -123,23 +123,19 @@ func (f *FileStorage) Close() error {
 	if f.file == nil {
 		return nil
 	}
+
+	defer func() {
+		f.file = nil
+	}()
+
 	f.logger.Info("closing file storage")
 
-	syncErr := f.file.Sync()
-	closeErr := f.file.Close()
-
-	f.file = nil
-
-	// TODO: consider handling this better instead of nested error wrapping
-	if syncErr != nil && closeErr != nil {
-		return fmt.Errorf("failed to sync file: %w", fmt.Errorf("failed to close file: %w", closeErr))
+	if err := f.file.Sync(); err != nil {
+		f.logger.Error("failed to sync file before close", zap.Error(err))
 	}
 
-	if syncErr != nil {
-		return fmt.Errorf("failed to sync file: %w", syncErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("failed to close file: %w", closeErr)
+	if err := f.file.Close(); err != nil {
+		return fmt.Errorf("failed to close file: %w", err)
 	}
 
 	return nil
