@@ -11,7 +11,7 @@ type Storage interface {
 	WriteFailure(loadTestSpec *config.LoadTestSpec, stats Stats) error
 
 	GetStats(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error)
-	// GetFailures(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error)
+	GetFailures(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error)
 
 	Clear() error
 	Close() error

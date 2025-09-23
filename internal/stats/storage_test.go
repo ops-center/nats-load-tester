@@ -31,16 +31,6 @@ func TestStorage(t *testing.T) {
 			},
 		},
 		{
-			name: "FileStorage_Stdout",
-			storage: func() Storage {
-				fs, err := NewFileStorage("/dev/stdout", logger)
-				if err != nil {
-					t.Fatalf("failed to create FileStorage: %v", err)
-				}
-				return fs
-			},
-		},
-		{
 			name: "BadgerDB",
 			storage: func() Storage {
 				bs, err := NewBadgerStorage(t.TempDir(), logger)
@@ -48,6 +38,16 @@ func TestStorage(t *testing.T) {
 					t.Fatalf("failed to create BadgerStorage: %v", err)
 				}
 				return bs
+			},
+		},
+		{
+			name: "FileStorage_Stdout",
+			storage: func() Storage {
+				fs, err := NewFileStorage("/dev/stdout", logger)
+				if err != nil {
+					t.Fatalf("failed to create FileStorage: %v", err)
+				}
+				return fs
 			},
 		},
 	}
@@ -104,6 +104,24 @@ func testAllStorageOperations(t *testing.T, storage Storage) {
 		if err := storage.WriteFailure(spec, stats); err != nil {
 			t.Fatalf("WriteFailure failed: %v", err)
 		}
+
+		failures, err := storage.GetFailures(spec, 10, nil)
+		if err != nil {
+			t.Fatalf("GetFailures failed: %v", err)
+		}
+
+		if len(failures) != 1 {
+			t.Fatalf("expected 1 failure entry, got %d", len(failures))
+		}
+
+		failureEntry := failures[0]
+		if failureEntry.ConfigHash != spec.Hash() {
+			t.Errorf("expected config hash %s, got %s", spec.Hash(), failureEntry.ConfigHash)
+		}
+
+		if failureEntry.Stats.Published != stats.Published {
+			t.Errorf("expected published %d, got %d", stats.Published, failureEntry.Stats.Published)
+		}
 	})
 
 	t.Run("Limits and Filters", func(t *testing.T) {
@@ -153,6 +171,48 @@ func testAllStorageOperations(t *testing.T, storage Storage) {
 		for _, entry := range entries {
 			if entry.Timestamp.Before(cutoffTime) {
 				t.Errorf("entry timestamp %v is before cutoff %v", entry.Timestamp, cutoffTime)
+			}
+		}
+
+		// Test GetFailures with limits and filters
+		for i := range 3 {
+			failureStats := createTestStats()
+			failureStats.PublishErrors = uint64(i + 1)
+			if err := storage.WriteFailure(spec, failureStats); err != nil {
+				t.Fatalf("WriteFailure failed: %v", err)
+			}
+		}
+
+		failures, err := storage.GetFailures(spec, 2, nil)
+		if err != nil {
+			t.Fatalf("GetFailures failed: %v", err)
+		}
+
+		if len(failures) > 2 {
+			t.Errorf("expected at most 2 failure entries, got %d", len(failures))
+		}
+
+		cutoffTimeFailures := time.Now()
+		time.Sleep(10 * time.Millisecond)
+
+		lateFailure := createTestStats()
+		lateFailure.PublishErrors = 999
+		if err := storage.WriteFailure(spec, lateFailure); err != nil {
+			t.Fatalf("WriteFailure failed: %v", err)
+		}
+
+		failures, err = storage.GetFailures(spec, 10, &cutoffTimeFailures)
+		if err != nil {
+			t.Fatalf("GetFailures failed: %v", err)
+		}
+
+		if len(failures) == 0 {
+			t.Error("expected at least 1 failure entry after cutoff time")
+		}
+
+		for _, failureEntry := range failures {
+			if failureEntry.Timestamp.Before(cutoffTimeFailures) {
+				t.Errorf("failure entry timestamp %v is before cutoff %v", failureEntry.Timestamp, cutoffTimeFailures)
 			}
 		}
 	})

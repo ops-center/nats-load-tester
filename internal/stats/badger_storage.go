@@ -199,3 +199,67 @@ func (b *BadgerStorage) GetStats(loadTestSpec *config.LoadTestSpec, limit int, s
 
 	return stats, err
 }
+
+func (b *BadgerStorage) GetFailures(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error) {
+	var failures []StatsEntry
+	hash := loadTestSpec.Hash()
+
+	err := b.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = true
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		prefix := []byte("failure:")
+		if hash != "" {
+			prefix = fmt.Appendf(nil, "failure:%s:", hash)
+		}
+
+		count := 0
+		for it.Seek(prefix); it.ValidForPrefix(prefix) && (limit == 0 || count < limit); it.Next() {
+			item := it.Item()
+			key := string(item.Key())
+
+			// Parse key: failure:{configHash}:{unix}
+			parts := strings.Split(key, ":")
+			if len(parts) < 3 {
+				continue
+			}
+
+			configHash := parts[1]
+			unixMilliStr := parts[2]
+
+			unixMilli, err := strconv.ParseInt(unixMilliStr, 10, 64)
+			if err != nil {
+				continue
+			}
+			timestamp := time.UnixMilli(unixMilli)
+
+			// Filter by since timestamp if provided
+			if since != nil && timestamp.Before(*since) {
+				continue
+			}
+
+			err = item.Value(func(val []byte) error {
+				var s Stats
+				if err := json.Unmarshal(val, &s); err != nil {
+					return err
+				}
+
+				failures = append(failures, StatsEntry{
+					ConfigHash: configHash,
+					Timestamp:  timestamp,
+					Stats:      s,
+				})
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			count++
+		}
+		return nil
+	})
+
+	return failures, err
+}

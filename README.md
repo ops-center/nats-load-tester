@@ -1,8 +1,7 @@
 # 🚧 TODO 🚧
-- fix the stream/publisher/consumer subjects synchronization and/or validation.
-- implement 'GetFailures()' method for reading runtime failures.
-- implement more storage persistence and query features.
-- improve performance for file storage.
+- ~~fix the stream/publisher/consumer subjects synchronization and/or validation~~.
+- ~~implement 'GetFailures()' method for reading runtime failures.~~
+- ~~improve performance for file storage.~~
 - ensure that everything actually works.
 ------
 

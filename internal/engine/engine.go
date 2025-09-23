@@ -143,11 +143,7 @@ func (e *Engine) setupStreams(loadTestSpec *config.LoadTestSpec) error {
 	for _, loadTestSpecStream := range loadTestSpec.Streams {
 		for i := 0; i < loadTestSpecStream.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", loadTestSpecStream.NamePrefix, i+1)
-
-			subjects := make([]string, len(loadTestSpecStream.Subjects))
-			for j, subject := range loadTestSpecStream.Subjects {
-				subjects[j] = fmt.Sprintf(subject, i+1)
-			}
+			subjects := loadTestSpecStream.GetFormattedSubjects(i + 1)
 
 			streamConfig := &nats.StreamConfig{
 				Name:     streamName,
@@ -182,6 +178,11 @@ func (e *Engine) setupStreams(loadTestSpec *config.LoadTestSpec) error {
 
 func (e *Engine) startPublishers(ctx context.Context, loadTestSpec *config.LoadTestSpec) {
 	for _, loadTestSpecStream := range loadTestSpec.Streams {
+		// Only create publishers for streams that match the publisher's stream name prefix
+		if loadTestSpecStream.NamePrefix != loadTestSpec.Publishers.StreamNamePrefix {
+			continue
+		}
+
 		for i := 0; i < loadTestSpecStream.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", loadTestSpecStream.NamePrefix, i+1)
 
@@ -189,7 +190,7 @@ func (e *Engine) startPublishers(ctx context.Context, loadTestSpec *config.LoadT
 				pubCfg := PublisherConfig{
 					ID:             fmt.Sprintf("%s-pub-%d-%d", loadTestSpec.ClientIDPrefix, i+1, j+1),
 					StreamName:     streamName,
-					Subject:        fmt.Sprintf(loadTestSpecStream.Subjects[0], i+1),
+					Subject:        loadTestSpecStream.FormatSubject(0, i+1),
 					MessageSize:    loadTestSpec.Publishers.MessageSizeBytes,
 					PublishRate:    loadTestSpec.Publishers.PublishRatePerSecond,
 					TrackLatency:   loadTestSpec.Publishers.TrackLatency,
@@ -220,6 +221,11 @@ func (e *Engine) startConsumers(ctx context.Context, loadTestSpec *config.LoadTe
 	consumerStartErrGroup := &errgroup.Group{}
 
 	for _, loadTestSpecStream := range loadTestSpec.Streams {
+		// Only create consumers for streams that match the consumer's stream name prefix
+		if loadTestSpecStream.NamePrefix != loadTestSpec.Consumers.StreamNamePrefix {
+			continue
+		}
+
 		for i := 0; i < loadTestSpecStream.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", loadTestSpecStream.NamePrefix, i+1)
 
@@ -234,7 +240,7 @@ func (e *Engine) startConsumers(ctx context.Context, loadTestSpec *config.LoadTe
 					ConsumeDelayMs: loadTestSpec.Consumers.ConsumeDelayMs,
 					AckPolicy:      loadTestSpec.Consumers.AckPolicy,
 					UseJetStream:   loadTestSpec.UseJetStream,
-					Subject:        fmt.Sprintf(loadTestSpecStream.Subjects[0], i+1),
+					Subject:        loadTestSpecStream.FormatSubject(0, i+1),
 				}
 
 				cons := NewConsumer(e.nc, e.js, consCfg, e.statsCollector, e.logger)

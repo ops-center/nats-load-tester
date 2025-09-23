@@ -138,6 +138,32 @@ func (f *FileStorage) GetStats(loadTestSpec *config.LoadTestSpec, limit int, sin
 	return filtered, nil
 }
 
+func (f *FileStorage) GetFailures(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	configHash := loadTestSpec.Hash()
+	entries, exists := f.failuresCache[configHash]
+	if !exists {
+		return []StatsEntry{}, nil
+	}
+
+	var filtered []StatsEntry
+	for _, entry := range entries {
+		if since != nil && entry.Timestamp.Before(*since) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+
+	if limit > 0 && len(filtered) > limit {
+		start := len(filtered) - limit
+		filtered = filtered[start:]
+	}
+
+	return filtered, nil
+}
+
 func (f *FileStorage) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
