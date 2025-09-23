@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/rand"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -15,25 +16,25 @@ type PublisherConfig struct {
 	ID             string
 	StreamName     string
 	Subject        string
-	MessageSize    int
-	PublishRate    int
+	MessageSize    int32
+	PublishRate    int32
 	TrackLatency   bool
 	PublishPattern string
 	UseJetStream   bool
 }
 
 type Publisher struct {
-	nc             *nats.Conn
-	js             nats.JetStreamContext
-	config         PublisherConfig
-	statsCollector StatsRecorder
-	logger         *zap.Logger
-	messageData    []byte
-	currentRate    int
-	targetRate     int
+	nc            *nats.Conn
+	js            nats.JetStreamContext
+	config        PublisherConfig
+	statsRecorder statsCollector
+	logger        *zap.Logger
+	messageData   []byte
+	currentRate   atomic.Int32
+	targetRate    int32
 }
 
-type StatsRecorder interface {
+type statsCollector interface {
 	RecordPublish()
 	RecordPublishError(error)
 	RecordConsume()
@@ -42,23 +43,23 @@ type StatsRecorder interface {
 	RecordError(error)
 }
 
-func NewPublisher(nc *nats.Conn, js nats.JetStreamContext, cfg PublisherConfig, stats StatsRecorder, logger *zap.Logger) *Publisher {
+func NewPublisher(nc *nats.Conn, js nats.JetStreamContext, cfg PublisherConfig, statsCollector statsCollector, logger *zap.Logger) *Publisher {
 	messageData := make([]byte, cfg.MessageSize)
 	if cfg.MessageSize > 8 {
-		for i := 8; i < cfg.MessageSize; i++ {
+		for i := int32(8); i < cfg.MessageSize; i++ {
 			messageData[i] = byte(rand.Intn(256))
 		}
 	}
 
 	return &Publisher{
-		nc:             nc,
-		js:             js,
-		config:         cfg,
-		statsCollector: stats,
-		logger:         logger,
-		messageData:    messageData,
-		currentRate:    1, // Start with low rate for ramp-up
-		targetRate:     cfg.PublishRate,
+		nc:            nc,
+		js:            js,
+		config:        cfg,
+		statsRecorder: statsCollector,
+		logger:        logger,
+		messageData:   messageData,
+		currentRate:   atomic.Int32{},
+		targetRate:    cfg.PublishRate,
 	}
 }
 
@@ -66,39 +67,42 @@ func (p *Publisher) Start(ctx context.Context) error {
 	p.logger.Info("Starting publisher",
 		zap.String("id", p.config.ID),
 		zap.String("subject", p.config.Subject),
-		zap.Int("rate", p.config.PublishRate),
+		zap.Int32("rate", p.config.PublishRate),
 	)
+	p.currentRate.Store(1)
 
 	// Start with current rate, will be updated during ramp-up
-	interval := time.Second / time.Duration(p.currentRate)
+	interval := time.Second / time.Duration(p.GetCurrentRate())
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	var burstSize int
+	var burstSize int32
 	if p.config.PublishPattern == "burst" {
-		burstSize = max(p.currentRate/10, 1)
+		burstSize = max(p.GetCurrentRate()/10, 1)
 	}
-	randomDelay := time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(p.currentRate)
+	randomDelay := time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(p.GetCurrentRate())
 	time.Sleep(randomDelay)
 
-	lastRate := p.currentRate
+	lastRate := p.GetCurrentRate()
 
 	for {
 		// Check if rate changed and update ticker if needed
-		if p.currentRate != lastRate {
-			lastRate = p.currentRate
+		currentRate := p.GetCurrentRate()
+
+		if currentRate != lastRate {
+			lastRate = currentRate
 			ticker.Stop()
-			interval = time.Second / time.Duration(p.currentRate)
+			interval = time.Second / time.Duration(currentRate)
 			ticker = time.NewTicker(interval)
 
 			if p.config.PublishPattern == "burst" {
-				burstSize = max(p.currentRate/10, 1)
+				burstSize = max(currentRate/10, 1)
 			}
 		}
 
-		if p.currentRate > 0 && p.config.PublishPattern == "random" {
+		if currentRate > 0 && p.config.PublishPattern == "random" {
 			ticker.Stop()
-			ticker = time.NewTicker(time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(p.currentRate))
+			ticker = time.NewTicker(time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(currentRate))
 		}
 
 		select {
@@ -111,19 +115,19 @@ func (p *Publisher) Start(ctx context.Context) error {
 			case "steady":
 				if err := p.publishMessage(); err != nil {
 					p.logger.Error("Failed to publish", zap.Error(err))
-					p.statsCollector.RecordPublishError(err)
+					p.statsRecorder.RecordPublishError(err)
 				}
 			case "burst":
-				for i := 0; i < burstSize; i++ {
+				for i := int32(0); i < burstSize; i++ {
 					if err := p.publishMessage(); err != nil {
 						p.logger.Error("Failed to publish", zap.Error(err))
-						p.statsCollector.RecordPublishError(err)
+						p.statsRecorder.RecordPublishError(err)
 					}
 				}
 			case "random":
 				if err := p.publishMessage(); err != nil {
 					p.logger.Error("Failed to publish", zap.Error(err))
-					p.statsCollector.RecordPublishError(err)
+					p.statsRecorder.RecordPublishError(err)
 				}
 			default:
 				return fmt.Errorf("unknown publish pattern: %s", p.config.PublishPattern)
@@ -153,32 +157,32 @@ func (p *Publisher) publishMessage() error {
 		return fmt.Errorf("publish failed: %w", err)
 	}
 
-	p.statsCollector.RecordPublish()
+	p.statsRecorder.RecordPublish()
 	return nil
 }
 
 // SetRate updates the current publishing rate
-func (p *Publisher) SetRate(rate int) {
+func (p *Publisher) SetRate(rate int32) {
 	if rate < 1 {
 		rate = 1
 	}
 	if rate > p.targetRate {
 		rate = p.targetRate
 	}
-	p.currentRate = rate
+	p.currentRate.Store(int32(rate))
 	p.logger.Debug("Publisher rate updated",
 		zap.String("id", p.config.ID),
-		zap.Int("new_rate", rate),
-		zap.Int("target_rate", p.targetRate),
+		zap.Int32("new_rate", rate),
+		zap.Int32("target_rate", p.targetRate),
 	)
 }
 
 // GetCurrentRate returns the current publishing rate
-func (p *Publisher) GetCurrentRate() int {
-	return p.currentRate
+func (p *Publisher) GetCurrentRate() int32 {
+	return p.currentRate.Load()
 }
 
 // GetTargetRate returns the target publishing rate
-func (p *Publisher) GetTargetRate() int {
+func (p *Publisher) GetTargetRate() int32 {
 	return p.targetRate
 }

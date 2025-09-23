@@ -35,8 +35,8 @@ type Collector struct {
 	rampUpActive   bool
 	rampUpStart    time.Time
 	rampUpDuration time.Duration
-	rampUpCurrent  int
-	rampUpTarget   int
+	rampUpCurrent  int32
+	rampUpTarget   int32
 }
 
 type Stats struct {
@@ -56,8 +56,8 @@ type Stats struct {
 type RampUpStats struct {
 	IsActive      bool    `json:"is_active"`
 	Progress      float64 `json:"progress"`       // 0.0 to 1.0
-	CurrentRate   int     `json:"current_rate"`   // Current publish rate
-	TargetRate    int     `json:"target_rate"`    // Target publish rate
+	CurrentRate   int32   `json:"current_rate"`   // Current publish rate
+	TargetRate    int32   `json:"target_rate"`    // Target publish rate
 	TimeRemaining string  `json:"time_remaining"` // Formatted duration remaining
 }
 
@@ -293,7 +293,7 @@ func (c *Collector) WriteFailure(err error) {
 }
 
 // SetRampUpStatus sets the current ramp-up status
-func (c *Collector) SetRampUpStatus(active bool, start time.Time, duration time.Duration, current, target int) {
+func (c *Collector) SetRampUpStatus(active bool, start time.Time, duration time.Duration, current, target int32) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

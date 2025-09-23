@@ -335,7 +335,7 @@ func testAllStorageOperations(t *testing.T, storage Storage) {
 		for i := range specs {
 			spec := createTestLoadTestSpec()
 			spec.Name = fmt.Sprintf("test-spec-%d", i)
-			spec.Publishers.CountPerStream = i + 1
+			spec.Publishers.CountPerStream = int32(i + 1)
 			specs[i] = spec
 		}
 

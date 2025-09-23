@@ -27,7 +27,7 @@ type Consumer struct {
 	nc             *nats.Conn
 	js             nats.JetStreamContext
 	config         ConsumerConfig
-	statsCollector StatsRecorder
+	statsCollector statsCollector
 	logger         *zap.Logger
 	subscription   *nats.Subscription
 }
@@ -39,7 +39,7 @@ type ConsumerStatsRecorder interface {
 	RecordPendingMessages(int)
 }
 
-func NewConsumer(nc *nats.Conn, js nats.JetStreamContext, cfg ConsumerConfig, stats StatsRecorder, logger *zap.Logger) *Consumer {
+func NewConsumer(nc *nats.Conn, js nats.JetStreamContext, cfg ConsumerConfig, stats statsCollector, logger *zap.Logger) *Consumer {
 	return &Consumer{
 		nc:             nc,
 		js:             js,

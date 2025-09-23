@@ -21,17 +21,17 @@ type LoadTestSpec struct {
 	NATSCredsFile  string          `json:"nats_creds_file,omitempty"`
 	UseJetStream   bool            `json:"use_jetstream"`
 	ClientIDPrefix string          `json:"client_id_prefix"`
-	Streams        []StreamConfig  `json:"streams"`
+	Streams        []StreamSpec    `json:"streams"`
 	Publishers     PublisherConfig `json:"publishers"`
 	Consumers      ConsumerConfig  `json:"consumers"`
 	Behavior       BehaviorConfig  `json:"behavior"`
 	LogLimits      LogLimits       `json:"log_limits"`
 }
 
-type StreamConfig struct {
+type StreamSpec struct {
 	NamePrefix                 string   `json:"name_prefix"`
-	Count                      int      `json:"count"`
-	Replicas                   int      `json:"replicas"`
+	Count                      int32    `json:"count"`
+	Replicas                   int32    `json:"replicas"`
 	Subjects                   []string `json:"subjects"`
 	MessagesPerStreamPerSecond int64    `json:"messages_per_stream_per_second"`
 	MessageSizeBytes           int64    `json:"message_size_bytes"`
@@ -39,20 +39,20 @@ type StreamConfig struct {
 }
 
 type PublisherConfig struct {
-	CountPerStream       int    `json:"count_per_stream"`
+	CountPerStream       int32  `json:"count_per_stream"`
 	StreamNamePrefix     string `json:"stream_name_prefix"`
-	PublishRatePerSecond int    `json:"publish_rate_per_second"`
-	MessageSizeBytes     int    `json:"message_size_bytes"`
+	PublishRatePerSecond int32  `json:"publish_rate_per_second"`
+	MessageSizeBytes     int32  `json:"message_size_bytes"`
 	TrackLatency         bool   `json:"track_latency"`
 }
 
 type ConsumerConfig struct {
 	StreamNamePrefix  string `json:"stream_name_prefix"`
 	Type              string `json:"type"`
-	CountPerStream    int    `json:"count_per_stream"`
+	CountPerStream    int32  `json:"count_per_stream"`
 	DurableNamePrefix string `json:"durable_name_prefix"`
 	AckWaitSeconds    int64  `json:"ack_wait_seconds"`
-	MaxAckPending     int    `json:"max_ack_pending"`
+	MaxAckPending     int32  `json:"max_ack_pending"`
 	ConsumeDelayMs    int64  `json:"consume_delay_ms"`
 	AckPolicy         string `json:"ack_policy"`
 }
@@ -63,7 +63,7 @@ type BehaviorConfig struct {
 }
 
 type LogLimits struct {
-	MaxLines int   `json:"max_lines"`
+	MaxLines int32 `json:"max_lines"`
 	MaxBytes int64 `json:"max_bytes"`
 }
 
@@ -171,7 +171,7 @@ func (lts *LoadTestSpec) Validate() error {
 	return nil
 }
 
-func (s *StreamConfig) Validate() error {
+func (s *StreamSpec) Validate() error {
 	if s.NamePrefix == "" {
 		return fmt.Errorf("name_prefix required")
 	}
@@ -295,8 +295,8 @@ func (lts *LoadTestSpec) Hash() string {
 
 func (lts *LoadTestSpec) ApplyMultipliers(rp RepeatPolicy) {
 	for i := range lts.Streams {
-		lts.Streams[i].Count = int(float64(lts.Streams[i].Count) * rp.Streams.CountMultiplier)
-		lts.Streams[i].Replicas = int(float64(lts.Streams[i].Replicas) * rp.Streams.ReplicasMultiplier)
+		lts.Streams[i].Count = int32(float64(lts.Streams[i].Count) * rp.Streams.CountMultiplier)
+		lts.Streams[i].Replicas = int32(float64(lts.Streams[i].Replicas) * rp.Streams.ReplicasMultiplier)
 		lts.Streams[i].MessagesPerStreamPerSecond = int64(float64(lts.Streams[i].MessagesPerStreamPerSecond) * rp.Streams.MessagesPerStreamPerSecondMultiplier)
 	}
 
@@ -304,12 +304,12 @@ func (lts *LoadTestSpec) ApplyMultipliers(rp RepeatPolicy) {
 	lts.Behavior.RampUpSeconds = int64(float64(lts.Behavior.RampUpSeconds) * rp.Behavior.RampUpMultiplier)
 
 	lts.Consumers.AckWaitSeconds = int64(float64(lts.Consumers.AckWaitSeconds) * rp.Consumers.AckWaitMultiplier)
-	lts.Consumers.MaxAckPending = int(float64(lts.Consumers.MaxAckPending) * rp.Consumers.MaxAckPendingMultiplier)
+	lts.Consumers.MaxAckPending = int32(float64(lts.Consumers.MaxAckPending) * rp.Consumers.MaxAckPendingMultiplier)
 	lts.Consumers.ConsumeDelayMs = int64(float64(lts.Consumers.ConsumeDelayMs) * rp.Consumers.ConsumeDelayMultiplier)
 
-	lts.Publishers.CountPerStream = int(float64(lts.Publishers.CountPerStream) * rp.Publishers.CountPerStreamMultiplier)
-	lts.Publishers.PublishRatePerSecond = int(float64(lts.Publishers.PublishRatePerSecond) * rp.Publishers.PublishRateMultiplier)
-	lts.Publishers.MessageSizeBytes = int(float64(lts.Publishers.MessageSizeBytes) * rp.Publishers.MessageSizeBytesMultiplier)
+	lts.Publishers.CountPerStream = int32(float64(lts.Publishers.CountPerStream) * rp.Publishers.CountPerStreamMultiplier)
+	lts.Publishers.PublishRatePerSecond = int32(float64(lts.Publishers.PublishRatePerSecond) * rp.Publishers.PublishRateMultiplier)
+	lts.Publishers.MessageSizeBytes = int32(float64(lts.Publishers.MessageSizeBytes) * rp.Publishers.MessageSizeBytesMultiplier)
 }
 
 func (c *Config) StatsInterval() time.Duration {
@@ -370,8 +370,8 @@ func containsFormatPlaceholder(subject string) bool {
 
 // FormatSubject formats a subject template with the given stream index (1-based)
 // If the subject has no format placeholder, returns the subject as-is
-func (s *StreamConfig) FormatSubject(subjectIndex, streamIndex int) string {
-	if subjectIndex >= len(s.Subjects) {
+func (s *StreamSpec) FormatSubject(subjectIndex, streamIndex int32) string {
+	if subjectIndex >= int32(len(s.Subjects)) {
 		return ""
 	}
 	subject := s.Subjects[subjectIndex]
@@ -383,7 +383,7 @@ func (s *StreamConfig) FormatSubject(subjectIndex, streamIndex int) string {
 
 // GetFormattedSubjects returns all subjects for a given stream index (1-based)
 // If a subject has no format placeholder, returns the subject as-is
-func (s *StreamConfig) GetFormattedSubjects(streamIndex int) []string {
+func (s *StreamSpec) GetFormattedSubjects(streamIndex int32) []string {
 	subjects := make([]string, len(s.Subjects))
 	for i, subject := range s.Subjects {
 		if containsFormatPlaceholder(subject) {

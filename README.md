@@ -2,7 +2,8 @@
 - ~~fix the stream/publisher/consumer subjects synchronization and/or validation~~.
 - ~~implement 'GetFailures()' method for reading runtime failures.~~
 - ~~improve performance for file storage.~~
-- ensure that everything actually works.
+- make streams more configurable (e.g. storage type, max msgs/bytes, retention policy, etc.).
+- support load testing nats clusters outside of k8s clusters, configured through args/envs.
 ------
 
 ## NATS Load Tester

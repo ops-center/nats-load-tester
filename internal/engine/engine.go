@@ -21,7 +21,6 @@ type Engine struct {
 	js             nats.JetStreamContext
 	loadTestSpec   *config.LoadTestSpec
 	publishers     []*Publisher
-	consumers      []*Consumer
 	cancel         context.CancelFunc
 	eg             *errgroup.Group
 }
@@ -31,7 +30,6 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector) *Engine {
 		logger:         logger,
 		statsCollector: statsCollector,
 		publishers:     make([]*Publisher, 0),
-		consumers:      make([]*Consumer, 0),
 	}
 }
 
@@ -139,16 +137,18 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 	return nil
 }
 
+// for each stream in the load test spec, create or update the stream in JetStream
+// based on the configuration in the load test spec.
 func (e *Engine) setupStreams(loadTestSpec *config.LoadTestSpec) error {
 	for _, loadTestSpecStream := range loadTestSpec.Streams {
-		for i := 0; i < loadTestSpecStream.Count; i++ {
+		for i := int32(0); i < loadTestSpecStream.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", loadTestSpecStream.NamePrefix, i+1)
 			subjects := loadTestSpecStream.GetFormattedSubjects(i + 1)
 
 			streamConfig := &nats.StreamConfig{
 				Name:     streamName,
 				Subjects: subjects,
-				Replicas: loadTestSpecStream.Replicas,
+				Replicas: int(loadTestSpecStream.Replicas),
 
 				// TODO: make these configurable
 				Retention:            nats.LimitsPolicy,
@@ -182,6 +182,8 @@ func (e *Engine) setupStreams(loadTestSpec *config.LoadTestSpec) error {
 	return nil
 }
 
+// startPublishers creates and starts publishers based on the load test spec and stream configurations
+// and adds them to the engine's publishers slice.
 func (e *Engine) startPublishers(ctx context.Context, loadTestSpec *config.LoadTestSpec) {
 	for _, loadTestSpecStream := range loadTestSpec.Streams {
 		// Only create publishers for streams that match the publisher's stream name prefix
@@ -189,10 +191,10 @@ func (e *Engine) startPublishers(ctx context.Context, loadTestSpec *config.LoadT
 			continue
 		}
 
-		for i := 0; i < loadTestSpecStream.Count; i++ {
+		for i := int32(0); i < loadTestSpecStream.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", loadTestSpecStream.NamePrefix, i+1)
 
-			for j := 0; j < loadTestSpec.Publishers.CountPerStream; j++ {
+			for j := int32(0); j < loadTestSpec.Publishers.CountPerStream; j++ {
 				pubCfg := PublisherConfig{
 					ID:             fmt.Sprintf("%s-pub-%d-%d", loadTestSpec.ClientIDPrefix, i+1, j+1),
 					StreamName:     streamName,
@@ -223,6 +225,8 @@ func (e *Engine) startPublishers(ctx context.Context, loadTestSpec *config.LoadT
 	}
 }
 
+// startConsumers creates and starts consumers based on the load test spec and stream configurations
+// and adds them to the engine's consumers slice.
 func (e *Engine) startConsumers(ctx context.Context, loadTestSpec *config.LoadTestSpec) error {
 	consumerStartErrGroup := &errgroup.Group{}
 
@@ -232,17 +236,17 @@ func (e *Engine) startConsumers(ctx context.Context, loadTestSpec *config.LoadTe
 			continue
 		}
 
-		for i := 0; i < loadTestSpecStream.Count; i++ {
+		for i := int32(0); i < loadTestSpecStream.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", loadTestSpecStream.NamePrefix, i+1)
 
-			for j := 0; j < loadTestSpec.Consumers.CountPerStream; j++ {
+			for j := int32(0); j < loadTestSpec.Consumers.CountPerStream; j++ {
 				consCfg := ConsumerConfig{
 					ID:             fmt.Sprintf("%s-con-%d-%d", loadTestSpec.ClientIDPrefix, i+1, j+1),
 					StreamName:     streamName,
 					DurableName:    fmt.Sprintf("%s_%d_%d", loadTestSpec.Consumers.DurableNamePrefix, i+1, j+1),
 					Type:           loadTestSpec.Consumers.Type,
 					AckWaitSeconds: loadTestSpec.Consumers.AckWaitSeconds,
-					MaxAckPending:  loadTestSpec.Consumers.MaxAckPending,
+					MaxAckPending:  int(loadTestSpec.Consumers.MaxAckPending),
 					ConsumeDelayMs: loadTestSpec.Consumers.ConsumeDelayMs,
 					AckPolicy:      loadTestSpec.Consumers.AckPolicy,
 					UseJetStream:   loadTestSpec.UseJetStream,
@@ -250,7 +254,6 @@ func (e *Engine) startConsumers(ctx context.Context, loadTestSpec *config.LoadTe
 				}
 
 				cons := NewConsumer(e.nc, e.js, consCfg, e.statsCollector, e.logger)
-				e.consumers = append(e.consumers, cons)
 
 				consID := cons.config.ID
 				consumer := cons
@@ -298,7 +301,7 @@ func (e *Engine) startRampUp(ctx context.Context, loadTestSpec *config.LoadTestS
 	rampUpTicker := time.NewTicker(time.Second)
 	e.logger.Info("Starting ramp-up", zap.Duration("duration", rampUpDuration))
 
-	targetRate := 0
+	targetRate := int32(0)
 	if len(e.publishers) > 0 {
 		targetRate = e.publishers[0].GetTargetRate()
 	}
@@ -323,14 +326,13 @@ func (e *Engine) startRampUp(ctx context.Context, loadTestSpec *config.LoadTestS
 			progress := min(float64(elapsed)/float64(rampUpDuration), 1.0)
 			e.updatePublisherRates(progress)
 
-			currentRate := 1
-			targetRate := 0
-			if len(e.publishers) > 0 {
-				currentRate = e.publishers[0].GetCurrentRate()
-				targetRate = e.publishers[0].GetTargetRate()
+			currentRate := int32(0)
+			targetRate := int32(0)
+			for _, pub := range e.publishers {
+				targetRate += pub.GetTargetRate()
+				currentRate += pub.GetCurrentRate()
 			}
 			e.statsCollector.SetRampUpStatus(true, rampUpStart, rampUpDuration, currentRate, targetRate)
-
 		}
 	}
 }
@@ -345,22 +347,22 @@ func (e *Engine) setAllPublishersToFullRate() {
 
 // updatePublisherRates updates all publisher rates based on ramp-up progress
 func (e *Engine) updatePublisherRates(progress float64) {
+	totalCurrentRate, totalTargetRate := int32(0), int32(0)
 	for _, pub := range e.publishers {
 		targetRate := pub.GetTargetRate()
 		// Start at 1 msg/sec and gradually increase to target rate
-		currentRate := min(max(int(1+(float64(targetRate-1)*progress)), 1), targetRate)
+		currentRate := min(max(int32(1+(float64(targetRate-1)*progress)), 1), targetRate)
 		pub.SetRate(currentRate)
+		totalCurrentRate += pub.GetCurrentRate()
+		totalTargetRate += pub.GetTargetRate()
 	}
 
-	// Log progress periodically
-	if len(e.publishers) > 0 {
-		sampleRate := int(1 + (float64(e.publishers[0].GetTargetRate()-1) * progress))
-		e.logger.Debug("Ramp-up progress",
-			zap.Float64("progress", progress*100),
-			zap.Int("current_rate", sampleRate),
-			zap.Int("target_rate", e.publishers[0].GetTargetRate()),
-		)
-	}
+	e.logger.Debug("Ramp-up progress",
+		zap.Float64("progress", progress*100),
+		zap.Int32("total_current_rate", totalCurrentRate),
+		zap.Int32("total_target_rate", totalTargetRate),
+		zap.Int("num_publishers", len(e.publishers)),
+	)
 }
 
 func (e *Engine) cleanup() {
@@ -372,5 +374,4 @@ func (e *Engine) cleanup() {
 	}
 
 	e.publishers = e.publishers[:0]
-	e.consumers = e.consumers[:0]
 }

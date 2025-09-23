@@ -18,7 +18,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				Name:           "test",
 				NATSURL:        "nats://localhost:4222",
 				ClientIDPrefix: "test",
-				Streams: []StreamConfig{
+				Streams: []StreamSpec{
 					{
 						NamePrefix: "test_stream",
 						Count:      1,
@@ -44,7 +44,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				Name:           "test",
 				NATSURL:        "nats://localhost:4222",
 				ClientIDPrefix: "test",
-				Streams: []StreamConfig{
+				Streams: []StreamSpec{
 					{
 						NamePrefix: "test_stream",
 						Count:      1,
@@ -71,7 +71,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				Name:           "test",
 				NATSURL:        "nats://localhost:4222",
 				ClientIDPrefix: "test",
-				Streams: []StreamConfig{
+				Streams: []StreamSpec{
 					{
 						NamePrefix: "test_stream",
 						Count:      1,
@@ -98,7 +98,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				Name:           "test",
 				NATSURL:        "nats://localhost:4222",
 				ClientIDPrefix: "test",
-				Streams: []StreamConfig{
+				Streams: []StreamSpec{
 					{
 						NamePrefix: "test_stream",
 						Count:      1,
@@ -124,7 +124,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				Name:           "test",
 				NATSURL:        "nats://localhost:4222",
 				ClientIDPrefix: "test",
-				Streams: []StreamConfig{
+				Streams: []StreamSpec{
 					{
 						NamePrefix: "test_stream",
 						Count:      1,
@@ -178,9 +178,9 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 func TestStreamConfigHelperMethods(t *testing.T) {
 	tests := []struct {
 		name      string
-		stream    StreamConfig
+		stream    StreamSpec
 		testCases []struct {
-			subjectIndex int
+			subjectIndex int32
 			streamIndex  int
 			expected     string
 		}
@@ -189,12 +189,12 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 	}{
 		{
 			name: "subjects with format placeholders",
-			stream: StreamConfig{
+			stream: StreamSpec{
 				NamePrefix: "test_stream",
 				Subjects:   []string{"test.subject.%d", "test.other.%d"},
 			},
 			testCases: []struct {
-				subjectIndex int
+				subjectIndex int32
 				streamIndex  int
 				expected     string
 			}{
@@ -206,12 +206,12 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 		},
 		{
 			name: "static subjects without placeholders",
-			stream: StreamConfig{
+			stream: StreamSpec{
 				NamePrefix: "test_stream",
 				Subjects:   []string{"static.subject", "another.static"},
 			},
 			testCases: []struct {
-				subjectIndex int
+				subjectIndex int32
 				streamIndex  int
 				expected     string
 			}{
@@ -226,13 +226,13 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, tc := range tt.testCases {
-				result := tt.stream.FormatSubject(tc.subjectIndex, tc.streamIndex)
+				result := tt.stream.FormatSubject(tc.subjectIndex, int32(tc.streamIndex))
 				if result != tc.expected {
 					t.Errorf("FormatSubject(%d, %d) = '%s', expected '%s'", tc.subjectIndex, tc.streamIndex, result, tc.expected)
 				}
 			}
 
-			subjects := tt.stream.GetFormattedSubjects(tt.streamIndexForAll)
+			subjects := tt.stream.GetFormattedSubjects(int32(tt.streamIndexForAll))
 			if len(subjects) != len(tt.expectedAllSubjects) {
 				t.Errorf("expected %d subjects, got %d", len(tt.expectedAllSubjects), len(subjects))
 				return
