@@ -13,13 +13,8 @@ type Storage interface {
 	GetStats(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error)
 	// GetFailures(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error)
 
+	Clear() error
 	Close() error
-}
-
-type ConfigEntry struct {
-	Hash      string         `json:"hash"`
-	Timestamp time.Time      `json:"timestamp"`
-	Config    *config.Config `json:"config"`
 }
 
 type StatsEntry struct {

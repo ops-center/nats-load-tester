@@ -3,6 +3,7 @@ package stats
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -78,7 +79,7 @@ func NewBadgerStorage(path string, logger *zap.Logger) (*BadgerStorage, error) {
 
 func (b *BadgerStorage) WriteStats(loadTestSpec *config.LoadTestSpec, stats Stats) error {
 	hash := loadTestSpec.Hash()
-	key := fmt.Sprintf("stats:%s:%s:%d", hash, stats.Timestamp.Format(time.RFC3339), stats.Timestamp.Unix())
+	key := fmt.Sprintf("stats:%s:%d", hash, stats.Timestamp.UnixMilli())
 	value, err := json.Marshal(stats)
 	if err != nil {
 		return fmt.Errorf("failed to marshal stats: %w", err)
@@ -95,7 +96,7 @@ func (b *BadgerStorage) WriteStats(loadTestSpec *config.LoadTestSpec, stats Stat
 
 func (b *BadgerStorage) WriteFailure(loadTestSpec *config.LoadTestSpec, stats Stats) error {
 	hash := loadTestSpec.Hash()
-	key := fmt.Sprintf("failure:%s:%s:%d", hash, stats.Timestamp.Format(time.RFC3339), stats.Timestamp.Unix())
+	key := fmt.Sprintf("failure:%s:%d", hash, stats.Timestamp.UnixMilli())
 	value, err := json.Marshal(stats)
 	if err != nil {
 		return fmt.Errorf("failed to marshal failure stats: %w", err)
@@ -130,6 +131,11 @@ func (b *BadgerStorage) Close() error {
 	return b.db.Close()
 }
 
+// NOTE: NOT SAFE FROM CONCURRENT READS
+func (b *BadgerStorage) Clear() error {
+	return b.db.DropAll()
+}
+
 func (b *BadgerStorage) GetStats(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error) {
 	var stats []StatsEntry
 	hash := loadTestSpec.Hash()
@@ -150,19 +156,20 @@ func (b *BadgerStorage) GetStats(loadTestSpec *config.LoadTestSpec, limit int, s
 			item := it.Item()
 			key := string(item.Key())
 
-			// Parse key: stats:{configHash}:{timestamp}:{unix}
+			// Parse key: stats:{configHash}:{unix}
 			parts := strings.Split(key, ":")
-			if len(parts) < 4 {
+			if len(parts) < 3 {
 				continue
 			}
 
 			configHash := parts[1]
-			timestampStr := parts[2]
+			unixMilliStr := parts[2]
 
-			timestamp, err := time.Parse(time.RFC3339, timestampStr)
+			unixMilli, err := strconv.ParseInt(unixMilliStr, 10, 64)
 			if err != nil {
 				continue
 			}
+			timestamp := time.UnixMilli(unixMilli)
 
 			// Filter by since timestamp if provided
 			if since != nil && timestamp.Before(*since) {

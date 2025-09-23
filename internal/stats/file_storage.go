@@ -20,6 +20,7 @@ type FileStorage struct {
 	failuresCache map[string][]StatsEntry
 	maxEntries    int
 	logger        *zap.Logger
+	isStdout      bool
 }
 
 type persistedEntry struct {
@@ -33,26 +34,41 @@ func NewFileStorage(filepath string, logger *zap.Logger) (*FileStorage, error) {
 	if logger == nil {
 		return nil, fmt.Errorf("logger cannot be nil")
 	}
+
+	var isStdout bool
+	if stat, err := os.Stat(filepath); err == nil {
+		if stdoutStat, err := os.Stdout.Stat(); err == nil {
+			isStdout = os.SameFile(stat, stdoutStat)
+		}
+	}
+
 	fs := &FileStorage{
 		filepath:      filepath,
 		statsCache:    make(map[string][]StatsEntry),
 		failuresCache: make(map[string][]StatsEntry),
 		logger:        logger,
 		maxEntries:    10,
+		isStdout:      isStdout,
 	}
 
-	// Open file handle first, then load existing data
-	file, err := os.OpenFile(filepath, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
-	}
-	fs.file = file
-
-	if err := fs.loadFromFile(); err != nil {
-		if closeErr := fs.file.Close(); closeErr != nil {
-			logger.Warn("failed to close file after load error", zap.Error(closeErr))
+	if isStdout {
+		fs.logger.Info("using stdout for stats storage", zap.String("file", filepath))
+		fs.file = os.Stdout
+	} else {
+		fs.logger.Info("using file for stats storage", zap.String("file", filepath))
+		// Open file handle first, then load existing data
+		file, err := os.OpenFile(filepath, os.O_CREATE|os.O_RDWR, 0o644)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open file: %w", err)
 		}
-		return nil, fmt.Errorf("failed to load existing data: %w", err)
+		fs.file = file
+
+		if err := fs.loadFromFile(); err != nil {
+			if closeErr := fs.file.Close(); closeErr != nil {
+				logger.Warn("failed to close file after load error", zap.Error(closeErr))
+			}
+			return nil, fmt.Errorf("failed to load existing data: %w", err)
+		}
 	}
 
 	return fs, nil
@@ -71,6 +87,9 @@ func (f *FileStorage) WriteStats(loadTestSpec *config.LoadTestSpec, stats Stats)
 
 	f.addToCache(f.statsCache, configHash, entry)
 
+	if f.isStdout {
+		return f.writeEntryToStdout("stats", configHash, entry)
+	}
 	return f.rewriteEntireFile()
 }
 
@@ -87,6 +106,9 @@ func (f *FileStorage) WriteFailure(loadTestSpec *config.LoadTestSpec, stats Stat
 
 	f.addToCache(f.failuresCache, configHash, entry)
 
+	if f.isStdout {
+		return f.writeEntryToStdout("failure", configHash, entry)
+	}
 	return f.rewriteEntireFile()
 }
 
@@ -120,6 +142,11 @@ func (f *FileStorage) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.isStdout {
+		f.file = nil
+		return nil
+	}
+
 	if f.file == nil {
 		return nil
 	}
@@ -141,6 +168,32 @@ func (f *FileStorage) Close() error {
 	return nil
 }
 
+func (f *FileStorage) Clear() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.statsCache = make(map[string][]StatsEntry)
+	f.failuresCache = make(map[string][]StatsEntry)
+
+	if f.isStdout {
+		return nil
+	}
+
+	if f.file != nil {
+		if err := f.file.Close(); err != nil {
+			f.logger.Error("failed to close file during clear", zap.Error(err))
+		}
+	}
+
+	file, err := os.OpenFile(f.filepath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to truncate file: %w", err)
+	}
+	f.file = file
+
+	return nil
+}
+
 func (f *FileStorage) addToCache(cache map[string][]StatsEntry, configHash string, entry StatsEntry) {
 	entries := cache[configHash]
 
@@ -154,6 +207,11 @@ func (f *FileStorage) addToCache(cache map[string][]StatsEntry, configHash strin
 }
 
 func (f *FileStorage) rewriteEntireFile() error {
+	if f.isStdout {
+		f.logger.Warn("rewriteEntireFile called in stdout mode; skipping rewrite")
+		return nil
+	}
+
 	if f.file == nil {
 		return fmt.Errorf("file handle is not initialized")
 	}
@@ -164,7 +222,7 @@ func (f *FileStorage) rewriteEntireFile() error {
 	}
 
 	tempFileName := tempFile.Name()
-	var tempClosed bool
+	var tempClosed, tempRenamed bool
 
 	defer func() {
 		if !tempClosed {
@@ -172,12 +230,14 @@ func (f *FileStorage) rewriteEntireFile() error {
 				f.logger.Warn("failed to close temp file", zap.String("tempFile", tempFileName), zap.Error(err))
 			}
 		}
-		if err := os.Remove(tempFileName); err != nil {
-			f.logger.Warn("failed to remove temp file", zap.String("tempFile", tempFileName), zap.Error(err))
+		if !tempRenamed {
+			if err := os.Remove(tempFileName); err != nil {
+				f.logger.Warn("failed to remove temp file", zap.String("tempFile", tempFileName), zap.Error(err))
+			}
 		}
 	}()
 
-	if err := f.writeAllData(tempFile); err != nil {
+	if err := f.writeAllDataToFile(tempFile); err != nil {
 		return fmt.Errorf("failed to write to temp file: %w", err)
 	}
 
@@ -193,6 +253,7 @@ func (f *FileStorage) rewriteEntireFile() error {
 	if err := os.Rename(tempFileName, f.filepath); err != nil {
 		return fmt.Errorf("failed to replace file: %w", err)
 	}
+	tempRenamed = true
 
 	if err := f.file.Close(); err != nil {
 		return fmt.Errorf("failed to close old file handle: %w", err)
@@ -208,7 +269,7 @@ func (f *FileStorage) rewriteEntireFile() error {
 	return nil
 }
 
-func (f *FileStorage) writeAllData(file *os.File) error {
+func (f *FileStorage) writeAllDataToFile(file *os.File) error {
 	for configHash, entries := range f.statsCache {
 		for _, statsEntry := range entries {
 			entry := persistedEntry{
@@ -243,6 +304,26 @@ func (f *FileStorage) writeAllData(file *os.File) error {
 				return fmt.Errorf("failed to write failure entry: %w", err)
 			}
 		}
+	}
+
+	return nil
+}
+
+func (f *FileStorage) writeEntryToStdout(entryType, configHash string, entry StatsEntry) error {
+	persistedEntry := persistedEntry{
+		Type:       entryType,
+		ConfigHash: configHash,
+		Timestamp:  entry.Timestamp,
+		Stats:      entry.Stats,
+	}
+
+	data, err := json.Marshal(persistedEntry)
+	if err != nil {
+		return fmt.Errorf("failed to marshal %s entry: %w", entryType, err)
+	}
+
+	if _, err := f.file.WriteString(string(data) + "\n"); err != nil {
+		return fmt.Errorf("failed to write %s entry to stdout: %w", entryType, err)
 	}
 
 	return nil
