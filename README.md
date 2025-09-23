@@ -33,9 +33,9 @@ curl -X POST http://localhost:9481/config \
         "streams": [
           {
             "name_prefix": "test_stream",
-            "count": 5,
+            "count": 5,  
             "replicas": 1,
-            "subjects": ["orders.*", "payments.*"],
+            "subjects": ["orders.{}", "payments.{}"],
             "messages_per_stream_per_second": 100,
             "message_size_bytes": 512,
             "publish_pattern": "steady"
@@ -55,11 +55,16 @@ curl -X POST http://localhost:9481/config \
           "durable_name_prefix": "test_consumer",
           "ack_wait_seconds": 30,
           "max_ack_pending": 1000,
+          "consume_delay_ms": 0,
           "ack_policy": "explicit"
         },
         "behavior": {
           "duration_seconds": 300,
           "ramp_up_seconds": 30
+        },
+        "log_limits": {
+          "max_lines": 200,
+          "max_bytes": 65536
         }
       }
     ],
@@ -242,7 +247,7 @@ JetStream stream configuration defining subjects, replication, and message throu
   "name_prefix": "test-stream",
   "count": 3,
   "replicas": 3,
-  "subjects": ["orders.*", "payments.*"],
+  "subjects": ["orders.{}", "payments.{}"],
   "messages_per_stream_per_second": 1000,
   "message_size_bytes": 1024,
   "publish_pattern": "steady"
@@ -254,7 +259,7 @@ JetStream stream configuration defining subjects, replication, and message throu
 | `name_prefix` | `string` | Prefix for generated stream names | Required |
 | `count` | `int` | Number of streams to create | Required |
 | `replicas` | `int` | JetStream replica count per stream | `1` |
-| `subjects` | `[]string` | NATS subjects for the streams | Required |
+| `subjects` | `[]string` | NATS subjects for the streams. Use `{}` placeholders for indexed subjects (automatically converted to `%d` format), or static subjects without placeholders. | Required |
 | `messages_per_stream_per_second` | `int64` | Target message rate per stream | `100` |
 | `message_size_bytes` | `int64` | Size of each message in bytes | `256` |
 | `publish_pattern` | `string` | Message publishing pattern ("steady", "burst", etc.) | `"steady"` |

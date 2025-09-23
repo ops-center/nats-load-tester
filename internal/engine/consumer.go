@@ -159,6 +159,7 @@ func (c *Consumer) startCoreConsumer() error {
 	return nil
 }
 
+// TODO: make this less shitty
 func (c *Consumer) handleMessage(msg *nats.Msg) {
 	if c.config.ConsumeDelayMs > 0 {
 		time.Sleep(time.Duration(c.config.ConsumeDelayMs) * time.Millisecond)
@@ -183,9 +184,7 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 
 func (c *Consumer) cleanup() error {
 	if c.subscription != nil {
-		if err := c.subscription.Unsubscribe(); err != nil {
-			return fmt.Errorf("failed to unsubscribe: %w", err)
-		}
+		// Drain handles both unsubscribe and cleanup
 		if err := c.subscription.Drain(); err != nil {
 			return fmt.Errorf("failed to drain subscription: %w", err)
 		}

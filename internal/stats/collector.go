@@ -260,7 +260,7 @@ func (c *Collector) GetHistory(limit int) []Stats {
 		return []Stats{}
 	}
 
-	entries, err := c.storage.GetStats(c.loadTestSpec, limit, nil) // Last 10 stats
+	entries, err := c.storage.GetStats(c.loadTestSpec, limit, nil)
 	if err != nil {
 		c.logger.Error("Failed to get stats history from storage", zap.Error(err))
 		return []Stats{}

@@ -188,11 +188,8 @@ func (s *StreamSpec) Validate() error {
 		return fmt.Errorf("at least one subject required")
 	}
 
-	// Normalize subject format placeholders: convert {} to %d
-	for i, subject := range s.Subjects {
-		if len(subject) >= 2 && subject[len(subject)-2:] == "{}" {
-			s.Subjects[i] = subject[:len(subject)-2] + "%d"
-		}
+	for i := range s.Subjects {
+		s.Subjects[i] = strings.Replace(s.Subjects[i], "{}", "%d", 1)
 	}
 
 	if s.MessagesPerStreamPerSecond <= 0 {
@@ -324,48 +321,45 @@ func (lts *LoadTestSpec) RampUpDuration() time.Duration {
 	return time.Duration(lts.Behavior.RampUpSeconds) * time.Second
 }
 
-// validateStreamSynchronization ensures that stream configurations, publishers, and consumers are properly synchronized
+// ValidateStreamSynchronization ensures that stream configurations, publishers, and consumers are properly synchronized
 func (lts *LoadTestSpec) validateStreamSynchronization() error {
-	// Validate that publisher stream_name_prefix matches at least one stream name_prefix
-	publisherStreamPrefix := lts.Publishers.StreamNamePrefix
+	// For now, require publishers and consumers to use the same stream prefix
+	if lts.Publishers.StreamNamePrefix != lts.Consumers.StreamNamePrefix {
+		return fmt.Errorf("publisher stream_name_prefix '%s' must match consumer stream_name_prefix '%s'", lts.Publishers.StreamNamePrefix, lts.Consumers.StreamNamePrefix)
+	}
+
+	// Validate that publisher.StreamNamePrefix matches at least one stream name_prefix
 	publisherMatched := false
 
 	for _, stream := range lts.Streams {
-		if stream.NamePrefix == publisherStreamPrefix {
+		if stream.NamePrefix == lts.Publishers.StreamNamePrefix {
 			publisherMatched = true
 			break
 		}
 	}
 
 	if !publisherMatched {
-		return fmt.Errorf("publisher stream_name_prefix '%s' does not match any stream name_prefix", publisherStreamPrefix)
+		return fmt.Errorf("publisher stream_name_prefix '%s' does not match any stream name_prefix", lts.Publishers.StreamNamePrefix)
 	}
 
-	// Validate that consumer stream_name_prefix matches at least one stream name_prefix
-	consumerStreamPrefix := lts.Consumers.StreamNamePrefix
+	// Validate that consumer.StreamNamePrefix matches at least one stream name_prefix
 	consumerMatched := false
-
 	for _, stream := range lts.Streams {
-		if stream.NamePrefix == consumerStreamPrefix {
+		if stream.NamePrefix == lts.Consumers.StreamNamePrefix {
 			consumerMatched = true
 			break
 		}
 	}
 
 	if !consumerMatched {
-		return fmt.Errorf("consumer stream_name_prefix '%s' does not match any stream name_prefix", consumerStreamPrefix)
-	}
-
-	// For now, require publishers and consumers to use the same stream prefix
-	if publisherStreamPrefix != consumerStreamPrefix {
-		return fmt.Errorf("publisher stream_name_prefix '%s' must match consumer stream_name_prefix '%s'", publisherStreamPrefix, consumerStreamPrefix)
+		return fmt.Errorf("consumer stream_name_prefix '%s' does not match any stream name_prefix", lts.Consumers.StreamNamePrefix)
 	}
 
 	return nil
 }
 
 func containsFormatPlaceholder(subject string) bool {
-	return strings.Contains(subject, "{}") || strings.Contains(subject, "%d")
+	return strings.Contains(subject, "%d")
 }
 
 // FormatSubject formats a subject template with the given stream index (1-based)

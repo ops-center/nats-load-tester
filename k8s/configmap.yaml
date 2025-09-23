@@ -9,7 +9,7 @@ metadata:
 data:
   config.json: |-
     {
-      "configurations": [
+      "load_test_specs": [
         {
           "name": "100-streams-3-replicas-immediate",
           "nats_url": "${NATS_URL}",

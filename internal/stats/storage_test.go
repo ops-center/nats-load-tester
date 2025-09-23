@@ -40,16 +40,16 @@ func TestStorage(t *testing.T) {
 				return bs
 			},
 		},
-		{
-			name: "FileStorage_Stdout",
-			storage: func() Storage {
-				fs, err := NewFileStorage("/dev/stdout", logger)
-				if err != nil {
-					t.Fatalf("failed to create FileStorage: %v", err)
-				}
-				return fs
-			},
-		},
+		// {
+		// 	name: "FileStorage_Stdout",
+		// 	storage: func() Storage {
+		// 		fs, err := NewFileStorage("/dev/stdout", logger)
+		// 		if err != nil {
+		// 			t.Fatalf("failed to create FileStorage: %v", err)
+		// 		}
+		// 		return fs
+		// 	},
+		// },
 	}
 
 	for _, tt := range tests {

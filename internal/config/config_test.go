@@ -22,7 +22,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					{
 						NamePrefix: "test_stream",
 						Count:      1,
-						Subjects:   []string{"test.subject.%d"},
+						Subjects:   []string{"test.subject.{}"},
 					},
 				},
 				Publishers: PublisherConfig{
@@ -48,7 +48,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					{
 						NamePrefix: "test_stream",
 						Count:      1,
-						Subjects:   []string{"test.subject.%d"},
+						Subjects:   []string{"test.subject.{}"},
 					},
 				},
 				Publishers: PublisherConfig{
@@ -63,7 +63,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				Behavior: BehaviorConfig{},
 			},
 			wantError: true,
-			errorMsg:  "publisher stream_name_prefix 'different_stream' does not match any stream name_prefix",
+			errorMsg:  "publisher stream_name_prefix 'different_stream' must match consumer stream_name_prefix 'test_stream'",
 		},
 		{
 			name: "consumer stream prefix mismatch",
@@ -75,7 +75,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					{
 						NamePrefix: "test_stream",
 						Count:      1,
-						Subjects:   []string{"test.subject.%d"},
+						Subjects:   []string{"test.subject.{}"},
 					},
 				},
 				Publishers: PublisherConfig{
@@ -90,7 +90,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				Behavior: BehaviorConfig{},
 			},
 			wantError: true,
-			errorMsg:  "consumer stream_name_prefix 'different_stream' does not match any stream name_prefix",
+			errorMsg:  "publisher stream_name_prefix 'test_stream' must match consumer stream_name_prefix 'different_stream'",
 		},
 		{
 			name: "static subject format is valid",
@@ -191,7 +191,8 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 			name: "subjects with format placeholders",
 			stream: StreamSpec{
 				NamePrefix: "test_stream",
-				Subjects:   []string{"test.subject.%d", "test.other.%d"},
+				Count:      1,
+				Subjects:   []string{"test.subject.{}", "test.other.{}"},
 			},
 			testCases: []struct {
 				subjectIndex int32
@@ -208,6 +209,7 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 			name: "static subjects without placeholders",
 			stream: StreamSpec{
 				NamePrefix: "test_stream",
+				Count:      1,
 				Subjects:   []string{"static.subject", "another.static"},
 			},
 			testCases: []struct {
@@ -225,6 +227,10 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.stream.Validate(); err != nil {
+				t.Fatalf("unexpected stream validation error: %v", err)
+			}
+
 			for _, tc := range tt.testCases {
 				result := tt.stream.FormatSubject(tc.subjectIndex, int32(tc.streamIndex))
 				if result != tc.expected {
