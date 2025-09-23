@@ -149,7 +149,13 @@ func (e *Engine) setupStreams(loadTestSpec *config.LoadTestSpec) error {
 				Name:     streamName,
 				Subjects: subjects,
 				Replicas: loadTestSpecStream.Replicas,
-				Storage:  nats.FileStorage,
+
+				// TODO: make these configurable
+				Retention:            nats.LimitsPolicy,
+				MaxAge:               1 * time.Minute,
+				Storage:              nats.MemoryStorage,
+				DiscardNewPerSubject: true,
+				Discard:              nats.DiscardOld,
 			}
 
 			stream, err := e.js.StreamInfo(streamName)
