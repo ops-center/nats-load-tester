@@ -14,7 +14,11 @@ RUN apk --no-cache add ca-certificates
 
 WORKDIR /root/
 
+# Copy the binary
 COPY --from=builder /app/nats-load-tester .
+
+# Copy the default config to the expected location
+COPY --from=builder /app/config.default.json /config/config.default.json
 
 EXPOSE 9481
 
