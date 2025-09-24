@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"go.bytebuilders.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type ConsumerConfig struct {
@@ -21,6 +23,7 @@ type ConsumerConfig struct {
 	AckPolicy      string
 	UseJetStream   bool
 	Subject        string
+	TrackLatency   bool
 }
 
 type Consumer struct {
@@ -32,14 +35,7 @@ type Consumer struct {
 	subscription   *nats.Subscription
 }
 
-type ConsumerStatsRecorder interface {
-	RecordConsume()
-	RecordConsumeError(error)
-	RecordLatency(time.Duration)
-	RecordPendingMessages(int)
-}
-
-func NewConsumer(nc *nats.Conn, js nats.JetStreamContext, cfg ConsumerConfig, stats statsCollector, logger *zap.Logger) *Consumer {
+func NewConsumer(nc *nats.Conn, js nats.JetStreamContext, cfg ConsumerConfig, stats statsCollector, logger *zap.Logger) ConsumerInterface {
 	return &Consumer{
 		nc:             nc,
 		js:             js,
@@ -137,7 +133,7 @@ func (c *Consumer) startPullConsumer(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return c.cleanup()
+			return c.Cleanup()
 		default:
 			msgs, err := sub.Fetch(10, nats.MaxWait(time.Second))
 			if err != nil && err != nats.ErrTimeout {
@@ -167,13 +163,13 @@ func (c *Consumer) startCoreConsumer() error {
 	return nil
 }
 
-// TODO: make this less shitty
 func (c *Consumer) handleMessage(msg *nats.Msg) {
 	if c.config.ConsumeDelayMs > 0 {
 		time.Sleep(time.Duration(c.config.ConsumeDelayMs) * time.Millisecond)
 	}
 
-	if len(msg.Data) >= 8 {
+	// Only attempt to read timestamp if latency tracking is enabled and message is long enough
+	if c.config.TrackLatency && len(msg.Data) >= 8 {
 		timestamp := binary.LittleEndian.Uint64(msg.Data[:8])
 		latency := time.Since(time.Unix(0, int64(timestamp)))
 		c.statsCollector.RecordLatency(latency)
@@ -190,7 +186,7 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 	c.statsCollector.RecordConsume()
 }
 
-func (c *Consumer) cleanup() error {
+func (c *Consumer) Cleanup() error {
 	if c.subscription != nil {
 		// Drain handles both unsubscribe and cleanup
 		if err := c.subscription.Drain(); err != nil {
@@ -198,4 +194,90 @@ func (c *Consumer) cleanup() error {
 		}
 	}
 	return nil
+}
+
+// GetID returns the consumer's ID
+func (c *Consumer) GetID() string {
+	return c.config.ID
+}
+
+// GetStreamName returns the consumer's stream name
+func (c *Consumer) GetStreamName() string {
+	return c.config.StreamName
+}
+
+// GetSubject returns the consumer's subject
+func (c *Consumer) GetSubject() string {
+	return c.config.Subject
+}
+
+// CreateConsumers creates and starts consumers based on the load test spec and stream configurations
+func CreateConsumers(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) ([]ConsumerInterface, error) {
+	consumers := make([]ConsumerInterface, 0)
+	consumerStartErrGroup := &errgroup.Group{}
+
+	for _, loadTestSpecStream := range loadTestSpec.Streams {
+		// Only create consumers for streams that match the consumer's stream name prefix
+		if loadTestSpecStream.NamePrefix != loadTestSpec.Consumers.StreamNamePrefix {
+			continue
+		}
+
+		streamNames := loadTestSpecStream.GetFormattedStreamNames()
+		for streamIndex, streamName := range streamNames {
+			subjects := loadTestSpecStream.GetFormattedSubjects(int32(streamIndex + 1))
+
+			for subjectIndex, subject := range subjects {
+				for j := int32(0); j < loadTestSpec.Consumers.CountPerStream; j++ {
+					consCfg := ConsumerConfig{
+						ID:             fmt.Sprintf("%s-con-%d-%d-%d", loadTestSpec.ClientIDPrefix, streamIndex+1, subjectIndex, j+1),
+						StreamName:     streamName,
+						DurableName:    fmt.Sprintf("%s_%d_%d_%d", loadTestSpec.Consumers.DurableNamePrefix, streamIndex+1, subjectIndex, j+1),
+						Type:           loadTestSpec.Consumers.Type,
+						AckWaitSeconds: loadTestSpec.Consumers.AckWaitSeconds,
+						MaxAckPending:  int(loadTestSpec.Consumers.MaxAckPending),
+						ConsumeDelayMs: loadTestSpec.Consumers.ConsumeDelayMs,
+						AckPolicy:      loadTestSpec.Consumers.AckPolicy,
+						UseJetStream:   loadTestSpec.UseJetStream,
+						Subject:        subject,
+						TrackLatency:   loadTestSpec.Publishers.TrackLatency,
+					}
+
+					consumer := NewConsumer(nc, js, consCfg, statsCollector, logger)
+					consumers = append(consumers, consumer)
+
+					consumerStartErrGroup.Go(func() error {
+						if err := consumer.Start(ctx); err != nil {
+							statsCollector.RecordError(err)
+							logger.Error("consumer failed",
+								zap.String("id", consumer.GetID()),
+								zap.String("stream", consumer.GetStreamName()),
+								zap.String("subject", consumer.GetSubject()),
+								zap.Error(err))
+							return fmt.Errorf("consumer %s failed: %w", consumer.GetID(), err)
+						}
+						eg.Go(func() error {
+							<-ctx.Done()
+							if consumerErr := consumer.Cleanup(); consumerErr != nil {
+								logger.Error("consumer cleanup failed",
+									zap.String("id", consumer.GetID()),
+									zap.String("stream", consumer.GetStreamName()),
+									zap.String("subject", consumer.GetSubject()),
+									zap.Error(consumerErr))
+								return fmt.Errorf("consumer %s cleanup failed: %w", consumer.GetID(), consumerErr)
+							}
+							return nil
+						})
+						return nil
+					})
+				}
+			}
+		}
+	}
+
+	if err := consumerStartErrGroup.Wait(); err != nil {
+		logger.Error("one or more consumers failed to start", zap.Error(err))
+		return consumers, fmt.Errorf("one or more consumers failed to start: %w", err)
+	}
+
+	return consumers, nil
 }

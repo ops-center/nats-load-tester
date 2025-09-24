@@ -31,12 +31,9 @@ type Collector struct {
 	// Configuration hash tracking for hot reloading
 	currentLoadTestSpecHash string
 
-	// Ramp-up tracking
-	rampUpActive   bool
-	rampUpStart    time.Time
-	rampUpDuration time.Duration
-	rampUpCurrent  int32
-	rampUpTarget   int32
+	rampUpStats RampUpStats
+
+	maxLatencySamples int
 }
 
 type Stats struct {
@@ -56,8 +53,6 @@ type Stats struct {
 type RampUpStats struct {
 	IsActive      bool    `json:"is_active"`
 	Progress      float64 `json:"progress"`       // 0.0 to 1.0
-	CurrentRate   int32   `json:"current_rate"`   // Current publish rate
-	TargetRate    int32   `json:"target_rate"`    // Target publish rate
 	TimeRemaining string  `json:"time_remaining"` // Formatted duration remaining
 }
 
@@ -71,12 +66,13 @@ type LatencyStats struct {
 
 func NewCollector(logger *zap.Logger, storage Storage) *Collector {
 	return &Collector{
-		logger:        logger,
-		storage:       storage,
-		latencies:     make([]time.Duration, 0, 10000),
-		errors:        make([]error, 0),
-		startTime:     time.Now(),
-		lastStatsTime: time.Now(),
+		logger:            logger,
+		storage:           storage,
+		latencies:         make([]time.Duration, 0, 10000),
+		errors:            make([]error, 0),
+		startTime:         time.Now(),
+		lastStatsTime:     time.Now(),
+		maxLatencySamples: 10000,
 	}
 }
 
@@ -95,6 +91,11 @@ func (c *Collector) SetConfig(loadTestSpec *config.LoadTestSpec) error {
 	c.errors = c.errors[:0]
 	c.startTime = time.Now()
 	c.lastStatsTime = time.Now()
+	c.maxLatencySamples = 10000
+
+	if loadTestSpec.LogLimits.MaxLines > 0 {
+		c.maxLatencySamples = min(int(loadTestSpec.LogLimits.MaxLines)*10, 10000)
+	}
 
 	return nil
 }
@@ -159,6 +160,16 @@ func (c *Collector) RecordLatency(latency time.Duration) {
 	defer c.latencyMu.Unlock()
 
 	c.latencies = append(c.latencies, latency)
+
+	if len(c.latencies) > c.maxLatencySamples {
+		overflow := len(c.latencies) - c.maxLatencySamples
+		c.latencies = c.latencies[overflow:]
+
+		c.logger.Warn("Latency samples evicted due to size limit",
+			zap.Int("evicted", overflow),
+			zap.Int("max_samples", c.maxLatencySamples),
+		)
+	}
 }
 
 func (c *Collector) CollectStats() Stats {
@@ -192,11 +203,10 @@ func (c *Collector) CollectStats() Stats {
 	copy(stats.Errors, c.errors)
 	c.errors = c.errors[:0]
 
-	stats.RampUp = c.getRampUpStats(now)
+	stats.RampUp = c.rampUpStats
 
 	c.lastStatsTime = now
 
-	// Write individual stats directly to storage (no in-memory cache)
 	if c.currentLoadTestSpecHash != "" && c.storage != nil {
 		if err := c.storage.WriteStats(c.loadTestSpec, stats); err != nil {
 			c.logger.Error("Failed to write stats", zap.Error(err))
@@ -245,7 +255,6 @@ func (c *Collector) Start(ctx context.Context, statsInterval time.Duration) {
 			c.CollectStats()
 			return
 		case <-ticker.C:
-			// Stats are automatically written to storage in CollectStats()
 			c.CollectStats()
 		}
 	}
@@ -294,37 +303,14 @@ func (c *Collector) WriteFailure(err error) {
 }
 
 // SetRampUpStatus sets the current ramp-up status
-func (c *Collector) SetRampUpStatus(active bool, start time.Time, duration time.Duration, current, target int32) {
+func (c *Collector) SetRampUpStatus(active bool, currentProgress float64, timeRemaining time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.rampUpActive = active
-	c.rampUpStart = start
-	c.rampUpDuration = duration
-	c.rampUpCurrent = current
-	c.rampUpTarget = target
-}
-
-// getRampUpStats calculates current ramp-up statistics
-func (c *Collector) getRampUpStats(now time.Time) RampUpStats {
-	if !c.rampUpActive {
-		return RampUpStats{IsActive: false}
-	}
-
-	elapsed := now.Sub(c.rampUpStart)
-	progress := float64(elapsed) / float64(c.rampUpDuration)
-	if progress > 1.0 {
-		progress = 1.0
-	}
-
-	timeRemaining := max(c.rampUpDuration-elapsed, 0)
-
-	return RampUpStats{
-		IsActive:      true,
-		Progress:      progress,
-		CurrentRate:   c.rampUpCurrent,
-		TargetRate:    c.rampUpTarget,
-		TimeRemaining: timeRemaining.Truncate(time.Second).String(),
+	c.rampUpStats = RampUpStats{
+		IsActive:      active,
+		Progress:      currentProgress,
+		TimeRemaining: FormatLatency(timeRemaining),
 	}
 }
 

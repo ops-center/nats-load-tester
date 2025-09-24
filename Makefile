@@ -13,6 +13,26 @@ FULL_IMAGE_NAME = $(DOCKER_REGISTRY)/$(IMAGE_NAME):$(VERSION)
 # Dynamic NATS URL generation
 NATS_URL = nats://$(NATS_SERVICE_NAME).$(NATS_SERVICE_NAMESPACE).svc.cluster.local:$(NATS_PORT)
 
+
+.PHONY: help
+help:
+	@echo "Available targets:"
+	@echo "  build        - Build Docker image"
+	@echo "  push         - Build and push Docker image to registry"
+	@echo "  clean        - Remove deployment and service from Kubernetes"
+	@echo "  deploy       - Build, push, and deploy to Kubernetes"
+	@echo "  config       - Show current configuration and preview generated configmap"
+	@echo ""
+	@echo "Configuration:"
+	@echo "  DOCKER_REGISTRY        = $(DOCKER_REGISTRY)"
+	@echo "  IMAGE_NAME             = $(IMAGE_NAME)"
+	@echo "  VERSION                = $(VERSION)"
+	@echo "  K8S_NAMESPACE          = $(K8S_NAMESPACE)"
+	@echo "  NATS_SERVICE_NAME      = $(NATS_SERVICE_NAME)"
+	@echo "  NATS_SERVICE_NAMESPACE = $(NATS_SERVICE_NAMESPACE)"
+	@echo "  NATS_PORT              = $(NATS_PORT)"
+	@echo "  NATS_URL               = $(NATS_URL)"
+
 # Build targets
 .PHONY: build
 build:
@@ -44,29 +64,14 @@ deploy: push clean
 		k8s/deployment.yaml | kubectl apply -n $(K8S_NAMESPACE) -f -
 	kubectl apply -f k8s/service.yaml -n $(K8S_NAMESPACE)
 
-.PHONY: logs
-logs:
-	kubectl logs -f deployment/nats-load-tester -n $(K8S_NAMESPACE)
-
-.PHONY: port-forward
-port-forward:
-	kubectl port-forward service/nats-load-tester 9481:9481 -n $(K8S_NAMESPACE)
-
-.PHONY: test-local
-test-local:
+.PHONY: test
+test:
 	go test ./...
 
 .PHONY: run-local
 run-local:
 	go run cmd/load-tester/main.go
 
-.PHONY: fmt
-fmt:
-	go fmt ./...
-
-.PHONY: vet
-vet:
-	go vet ./...
 
 .PHONY: config
 config:
@@ -75,28 +80,3 @@ config:
 	@echo ""
 	@echo "Generated configmap preview:"
 	@sed -e "s|\$${NATS_URL}|$(NATS_URL)|g" k8s/configmap.yaml | head -20
-
-.PHONY: help
-help:
-	@echo "Available targets:"
-	@echo "  build        - Build Docker image"
-	@echo "  push         - Build and push Docker image to registry"
-	@echo "  clean        - Remove deployment and service from Kubernetes"
-	@echo "  deploy       - Build, push, and deploy to Kubernetes"
-	@echo "  config       - Show current configuration and preview generated configmap"
-	@echo "  logs         - Follow logs from the deployment"
-	@echo "  port-forward - Forward local port 8080 to the service"
-	@echo "  test-local   - Run tests locally"
-	@echo "  run-local    - Run the application locally"
-	@echo "  fmt          - Format Go code"
-	@echo "  vet          - Run Go vet"
-	@echo ""
-	@echo "Configuration:"
-	@echo "  DOCKER_REGISTRY        = $(DOCKER_REGISTRY)"
-	@echo "  IMAGE_NAME             = $(IMAGE_NAME)"
-	@echo "  VERSION                = $(VERSION)"
-	@echo "  K8S_NAMESPACE          = $(K8S_NAMESPACE)"
-	@echo "  NATS_SERVICE_NAME      = $(NATS_SERVICE_NAME)"
-	@echo "  NATS_SERVICE_NAMESPACE = $(NATS_SERVICE_NAMESPACE)"
-	@echo "  NATS_PORT              = $(NATS_PORT)"
-	@echo "  NATS_URL               = $(NATS_URL)"

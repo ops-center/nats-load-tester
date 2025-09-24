@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"go.bytebuilders.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type PublisherConfig struct {
@@ -19,7 +20,7 @@ type PublisherConfig struct {
 	Subject          string
 	MessageSize      int32
 	PublishRate      int32
-	TrackLatency     bool // TODO: track latency between publishes/acks
+	TrackLatency     bool
 	PublishPattern   string
 	PublishBurstSize int32
 	UseJetStream     bool
@@ -45,7 +46,7 @@ type statsCollector interface {
 	RecordError(error)
 }
 
-func NewPublisher(nc *nats.Conn, js nats.JetStreamContext, cfg PublisherConfig, statsCollector statsCollector, logger *zap.Logger) *Publisher {
+func NewPublisher(nc *nats.Conn, js nats.JetStreamContext, cfg PublisherConfig, statsCollector statsCollector, logger *zap.Logger) PublisherInterface {
 	messageData := make([]byte, cfg.MessageSize)
 	if cfg.MessageSize > 8 {
 		for i := int32(8); i < cfg.MessageSize; i++ {
@@ -186,4 +187,70 @@ func (p *Publisher) GetCurrentRate() int32 {
 // GetTargetRate returns the target publishing rate
 func (p *Publisher) GetTargetRate() int32 {
 	return p.targetRate
+}
+
+// GetID returns the publisher's ID
+func (p *Publisher) GetID() string {
+	return p.config.ID
+}
+
+// GetStreamName returns the publisher's stream name
+func (p *Publisher) GetStreamName() string {
+	return p.config.StreamName
+}
+
+// GetSubject returns the publisher's subject
+func (p *Publisher) GetSubject() string {
+	return p.config.Subject
+}
+
+// CreatePublishers creates and starts publishers based on the load test spec and stream configurations
+func CreatePublishers(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) []PublisherInterface {
+	publishers := make([]PublisherInterface, 0)
+
+	for _, loadTestSpecStream := range loadTestSpec.Streams {
+		// Only create publishers for streams that match the publisher's stream name prefix
+		if loadTestSpecStream.NamePrefix != loadTestSpec.Publishers.StreamNamePrefix {
+			continue
+		}
+
+		streamNames := loadTestSpecStream.GetFormattedStreamNames()
+		for streamIndex, streamName := range streamNames {
+			subjects := loadTestSpecStream.GetFormattedSubjects(int32(streamIndex + 1))
+
+			for subjectIndex, subject := range subjects {
+				for j := int32(0); j < loadTestSpec.Publishers.CountPerStream; j++ {
+					pubCfg := PublisherConfig{
+						ID:               fmt.Sprintf("%s-pub-%d-%d-%d", loadTestSpec.ClientIDPrefix, streamIndex+1, subjectIndex, j+1),
+						StreamName:       streamName,
+						Subject:          subject,
+						MessageSize:      loadTestSpec.Publishers.MessageSizeBytes,
+						PublishRate:      loadTestSpec.Publishers.PublishRatePerSecond,
+						TrackLatency:     loadTestSpec.Publishers.TrackLatency,
+						PublishPattern:   loadTestSpec.Publishers.PublishPattern,
+						PublishBurstSize: loadTestSpec.Publishers.PublishBurstSize,
+						UseJetStream:     loadTestSpec.UseJetStream,
+					}
+
+					publisher := NewPublisher(nc, js, pubCfg, statsCollector, logger)
+					publishers = append(publishers, publisher)
+
+					eg.Go(func() error {
+						if err := publisher.Start(ctx); err != nil {
+							logger.Error("Publisher failed",
+								zap.String("id", publisher.GetID()),
+								zap.String("stream", publisher.GetStreamName()),
+								zap.String("subject", publisher.GetSubject()),
+								zap.Error(err))
+							statsCollector.RecordError(err)
+							return fmt.Errorf("publisher %s failed: %w", publisher.GetID(), err)
+						}
+						return nil
+					})
+				}
+			}
+		}
+	}
+
+	return publishers
 }

@@ -63,14 +63,11 @@ func loadDefaultConfig(configChannel chan<- *config.Config, logger *zap.Logger, 
 
 func createStorage(cfg config.Storage, logger *zap.Logger) (stats.Storage, error) {
 	switch cfg.Type {
-	case "badger":
+	case config.BadgerDBStorage:
 		return stats.NewBadgerStorage(cfg.Path, logger)
-	case "file", "":
-		if cfg.Path == "" {
-			cfg.Path = "./load_test_stats.log"
-		}
+	case config.FileStorage:
 		return stats.NewFileStorage(cfg.Path, logger)
-	case "stdout":
+	case config.StdoutStorage:
 		return stats.NewFileStorage("/dev/stdout", logger)
 	default:
 		return nil, fmt.Errorf("unknown storage type: %s", cfg.Type)

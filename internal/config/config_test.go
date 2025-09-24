@@ -661,9 +661,9 @@ func TestStreamSpecGetterMethods(t *testing.T) {
 			expected bool
 		}{
 			{
-				name:     "nil defaults to true",
+				name:     "nil defaults to false",
 				stream:   StreamSpec{DiscardNewPerSubject: nil},
-				expected: true,
+				expected: false,
 			},
 			{
 				name:     "explicit true",

@@ -21,9 +21,19 @@ data:
               "name_prefix": "load_stream",
               "count": 100,
               "replicas": 3,
-              "subjects": ["test.subject.{}"],
+              "subjects": [
+                "test.subject.{}"
+              ],
               "messages_per_stream_per_second": 1000,
-              "message_size_bytes": 256
+              "retention": "limits",
+              "max_age": "5m",
+              "storage": "memory",
+              "discard_new_per_subject": false,
+              "discard": "old",
+              "max_msgs": 100000,
+              "max_bytes": 104857600,
+              "max_msgs_per_subject": 10000,
+              "max_consumers": 50
             }
           ],
           "publishers": {
@@ -79,7 +89,7 @@ data:
       },
       "storage": {
         "type": "file",
-        "path": "/var/lib/lt/load_test_stats.log"
+        "path": "./load_test_stats.log"
       },
       "stats_collection_interval_seconds": 5
     }

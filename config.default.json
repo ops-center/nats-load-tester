@@ -18,7 +18,7 @@
           "retention": "limits",
           "max_age": "5m",
           "storage": "memory",
-          "discard_new_per_subject": true,
+          "discard_new_per_subject": false,
           "discard": "old",
           "max_msgs": 100000,
           "max_bytes": 104857600,
@@ -78,8 +78,8 @@
     }
   },
   "storage": {
-    "type": "file",
-    "path": "/var/lib/lt/load_test_stats.log"
+    "type": "badger",
+    "path": ""
   },
   "stats_collection_interval_seconds": 5
 }

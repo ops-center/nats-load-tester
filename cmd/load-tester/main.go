@@ -14,6 +14,7 @@ import (
 
 type cliArgs struct {
 	configFilePath   string
+	mode             string
 	port             int
 	logLevel         string
 	useDefaultConfig bool
@@ -30,6 +31,7 @@ func main() {
 	}
 
 	rootCmd.PersistentFlags().StringVar(&args.configFilePath, "config-file-path", "", "Configuration file path")
+	rootCmd.PersistentFlags().StringVar(&args.mode, "mode", "", "Mode to run the load tester in (cluster, local)")
 	rootCmd.PersistentFlags().IntVar(&args.port, "port", 9481, "HTTP server port")
 	rootCmd.PersistentFlags().StringVar(&args.logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().BoolVar(&args.useDefaultConfig, "use-default-config", false, "Load default configuration on startup")

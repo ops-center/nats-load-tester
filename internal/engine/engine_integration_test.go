@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// TODO: sync/disable logs for clarity
 // TestNATSStreamConfigurationIntegration tests the complete workflow with all new stream configuration options
 func TestNATSStreamConfigurationIntegration(t *testing.T) {
 	t.Log("Starting embedded NATS server...")
@@ -338,7 +339,7 @@ func verifyWorkflow(t *testing.T, natsURL string, loadTestSpec *config.LoadTestS
 	return nil
 }
 
-// verifyStatsCollection verifies that stats were collected and written to file
+// verifyStatsCollection verifies that the stats file is non-empty
 func verifyStatsCollection(t *testing.T, statsPath string) error {
 	// Check if stats file exists
 	if _, err := os.Stat(statsPath); os.IsNotExist(err) {

@@ -23,3 +23,4 @@ COPY --from=builder /app/config.default.json /config/config.default.json
 EXPOSE 9481
 
 ENTRYPOINT ["./nats-load-tester"]
+CMD ["--use-default-config", "true", "--config-file-path", "/config/config.default.json"]

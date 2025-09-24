@@ -15,9 +15,17 @@ import (
 const (
 	consumerTypePush     = "push"
 	consumerTypePull     = "pull"
-	storageTypeBadger    = "badger"
-	defaultStoragePath   = "./load_test_stats.db"
 	defaultStatsInterval = 5
+)
+
+const (
+	BadgerDBStorage = "badger"
+	FileStorage     = "file"
+	StdoutStorage   = "stdout"
+
+	defaultBadgerDBPath      = "./load_test_stats.db"
+	defaultFileStoragePath   = "./load_test_stats.log"
+	defaultStdoutStoragePath = "/dev/stdout"
 )
 
 type Config struct {
@@ -76,7 +84,7 @@ type StreamSpec struct {
 	Retention            string `json:"retention,omitempty"`               // "limits", "interest", "workqueue" - defaults to "limits"
 	MaxAge               string `json:"max_age,omitempty"`                 // duration string like "1h", "30m" - defaults to "1m"
 	Storage              string `json:"storage,omitempty"`                 // "file", "memory" - defaults to "memory"
-	DiscardNewPerSubject *bool  `json:"discard_new_per_subject,omitempty"` // defaults to true
+	DiscardNewPerSubject *bool  `json:"discard_new_per_subject,omitempty"` // defaults to false
 	Discard              string `json:"discard,omitempty"`                 // "old", "new" - defaults to "old"
 	MaxMsgs              *int64 `json:"max_msgs,omitempty"`                // maximum number of messages - defaults to -1 (unlimited)
 	MaxBytes             *int64 `json:"max_bytes,omitempty"`               // maximum total size of messages - defaults to -1 (unlimited)
@@ -163,11 +171,24 @@ func (c *Config) Validate() error {
 	}
 
 	if c.Storage.Type == "" {
-		c.Storage.Type = storageTypeBadger
+		c.Storage.Type = BadgerDBStorage
+	}
+
+	if c.Storage.Type != BadgerDBStorage && c.Storage.Type != FileStorage && c.Storage.Type != StdoutStorage {
+		return fmt.Errorf("unknown storage type '%s'", c.Storage.Type)
 	}
 
 	if c.Storage.Path == "" {
-		c.Storage.Path = defaultStoragePath
+		switch c.Storage.Type {
+		case FileStorage:
+			c.Storage.Path = defaultFileStoragePath
+		case StdoutStorage:
+			c.Storage.Path = defaultStdoutStoragePath
+		case BadgerDBStorage:
+			c.Storage.Path = defaultBadgerDBPath
+		default:
+			return fmt.Errorf("storage path required for storage type '%s'", c.Storage.Type)
+		}
 	}
 
 	if c.StatsCollectionIntervalSeconds <= 0 {
@@ -185,10 +206,6 @@ func (lts *LoadTestSpec) Validate() error {
 
 	if lts.NATSURL == "" {
 		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("nats_url required"))
-	}
-
-	if lts.ClientIDPrefix == "" {
-		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("client_id_prefix required"))
 	}
 
 	if len(lts.Streams) == 0 {
@@ -215,6 +232,10 @@ func (lts *LoadTestSpec) Validate() error {
 
 	if err := lts.validateStreamSynchronization(); err != nil {
 		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("stream synchronization: %w", err))
+	}
+
+	if lts.ClientIDPrefix == "" {
+		lts.ClientIDPrefix = "load-tester"
 	}
 
 	return errors.Join(loadTestValidationErrors...)
@@ -255,6 +276,10 @@ func (s *StreamSpec) Validate() error {
 		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("discard must be '%s' or '%s', got '%s'", DiscardOld, DiscardNew, s.Discard))
 	}
 
+	if s.Discard == DiscardOld && s.DiscardNewPerSubject != nil && *s.DiscardNewPerSubject {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("discard_new_per_subject can only be 'true' when discard is '%s'", DiscardNew))
+	}
+
 	if s.MaxAge != "" {
 		if _, err := time.ParseDuration(s.MaxAge); err != nil {
 			streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_age must be a valid duration string (e.g., '1h', '30m'), got '%s': %w", s.MaxAge, err))
@@ -291,12 +316,13 @@ func (s *StreamSpec) Validate() error {
 
 func (p *PublisherConfig) Validate() error {
 	publishValidationErrors := []error{}
-	if p.CountPerStream <= 0 {
-		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("count_per_stream must be positive, got %d", p.CountPerStream))
-	}
 
 	if p.StreamNamePrefix == "" {
 		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("stream_name_prefix required"))
+	}
+
+	if p.CountPerStream <= 0 {
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("count_per_stream must be positive, got %d", p.CountPerStream))
 	}
 
 	if p.PublishRatePerSecond <= 0 {
@@ -323,12 +349,12 @@ func (c *ConsumerConfig) Validate() error {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("stream_name_prefix required"))
 	}
 
-	if c.Type != consumerTypePush && c.Type != consumerTypePull {
-		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("type must be '%s' or '%s', got '%s'", consumerTypePush, consumerTypePull, c.Type))
-	}
-
 	if c.CountPerStream <= 0 {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("count_per_stream must be positive, got %d", c.CountPerStream))
+	}
+
+	if c.Type != consumerTypePush && c.Type != consumerTypePull {
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("type must be '%s' or '%s', got '%s'", consumerTypePush, consumerTypePull, c.Type))
 	}
 
 	if c.DurableNamePrefix == "" {
@@ -476,6 +502,15 @@ func (s *StreamSpec) GetFormattedSubjects(streamIndex int32) []string {
 	return subjects
 }
 
+// GetFormattedStreamNames returns all stream names for this stream spec
+func (s *StreamSpec) GetFormattedStreamNames() []string {
+	streamNames := make([]string, s.Count)
+	for i := int32(0); i < s.Count; i++ {
+		streamNames[i] = fmt.Sprintf("%s_%d", s.NamePrefix, i+1)
+	}
+	return streamNames
+}
+
 // Stream configuration methods that return NATS types
 
 // GetRetentionPolicy returns the appropriate nats.RetentionPolicy for this stream
@@ -525,7 +560,7 @@ func (s *StreamSpec) GetMaxAge() time.Duration {
 // GetDiscardNewPerSubject returns the discard_new_per_subject setting, defaults to true if nil
 func (s *StreamSpec) GetDiscardNewPerSubject() bool {
 	if s.DiscardNewPerSubject == nil {
-		return true
+		return false
 	}
 	return *s.DiscardNewPerSubject
 }

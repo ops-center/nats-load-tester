@@ -1,456 +1,264 @@
-# 🚧 TODO 🚧
-- ~~fix the stream/publisher/consumer subjects synchronization and/or validation~~.
-- ~~implement 'GetFailures()' method for reading runtime failures.~~
-- ~~improve performance for file storage.~~
-- ~~make streams more configurable (e.g. storage type, max msgs/bytes, retention policy, etc.).~~
-- support load testing nats clusters outside of k8s clusters, configured through args/envs.
-------
+# NATS Load Tester
 
-## NATS Load Tester
+A high-throughput load testing tool for NATS JetStream with real-time configuration via HTTP API.
 
-A dynamically configurable load testing tool for NATS messaging systems with real-time configuration updates via HTTP API.
+Validates NATS cluster performance under realistic workloads with configurable message patterns, consumer types, and stream configurations.
 
-## API Endpoints
+## Usage
 
-### Configuration Management
+### Local Development
 
-#### `POST /config`
-Submit a new load test configuration. Cancels any currently running test and starts the new one. See [Configuration Schema](#configuration-schema) for complete payload structure.
+```bash
+# Run with default config
+go run cmd/load-tester/main.go --use-default-config
 
-**Request:** `application/json`
+# Run with custom config file
+go run cmd/load-tester/main.go --config-file-path config.default.json
 
-**Example Request:**
+# Run with debug logging
+go run cmd/load-tester/main.go --log-level debug --use-default-config
+
+# Run tests
+go test ./... -v
+
+# Build Docker image
+make build
+```
+
+### Kubernetes Deployment
+
+```bash
+# Deploy to cluster
+make deploy
+
+# Deploy with custom NATS configuration
+make deploy NATS_SERVICE_NAME=my-nats NATS_SERVICE_NAMESPACE=nats NATS_PORT=4222
+```
+
+### CLI Arguments
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | `9481` | HTTP API server port |
+| `--log-level` | `info` | Log level: debug, info, warn, error |
+| `--config-file-path` | - | Load configuration from file on startup |
+| `--use-default-config` | `false` | Load config.default.json on startup |
+
+## API
+
+**Submit load test configuration:**
 ```bash
 curl -X POST http://localhost:9481/config \
   -H "Content-Type: application/json" \
-  -d '{
-    "load_test_specs": [
-      {
-        "name": "example-load-test",
-        "nats_url": "nats://localhost:4222",
-        "use_jetstream": true,
-        "client_id_prefix": "load-tester",
-        "streams": [
-          {
-            "name_prefix": "test_stream",
-            "count": 5,  
-            "replicas": 1,
-            "subjects": ["orders.{}", "payments.{}"],
-            "messages_per_stream_per_second": 100,
-            "retention": "limits",
-            "max_age": "5m",
-            "storage": "memory", 
-            "discard_new_per_subject": true,
-            "discard": "old"
-          }
-        ],
-        "publishers": {
-          "count_per_stream": 1,
-          "stream_name_prefix": "test_stream",
-          "publish_rate_per_second": 100,
-          "publish_pattern": "steady",
-          "publish_burst_size": 1,
-          "message_size_bytes": 512,
-          "track_latency": true
-        },
-        "consumers": {
-          "stream_name_prefix": "test_stream",
-          "type": "push",
-          "count_per_stream": 1,
-          "durable_name_prefix": "test_consumer",
-          "ack_wait_seconds": 30,
-          "max_ack_pending": 1000,
-          "consume_delay_ms": 0,
-          "ack_policy": "explicit"
-        },
-        "behavior": {
-          "duration_seconds": 300,
-          "ramp_up_seconds": 30
-        },
-        "log_limits": {
-          "max_lines": 200,
-          "max_bytes": 65536
-        }
-      }
-    ],
-    "repeat_policy": {
-      "enabled": false
-    },
-    "storage": {
-      "type": "badger",
-      "path": "./test_stats.db"
-    },
-    "stats_collection_interval_seconds": 5
-  }'
+  -d @config.default.json
 ```
 
-**Response:** `200 OK`
-```json
-{
-  "queued": true,
-  "hash": "a1b2c3d4e5f6..."
-}
-```
-
-**Error Responses:**
-- `400 Bad Request` - Invalid JSON or configuration validation error
-- `503 Service Unavailable` - Server busy processing another configuration (5s timeout)
-
-#### `GET /config`
-Retrieve the currently active configuration.
-
-**Example Request:**
+**Get current configuration:**
 ```bash
 curl http://localhost:9481/config
 ```
 
-**Response:** `200 OK` with current config JSON
+**Retrieve statistics (optional limit parameter):**
+```bash
+curl http://localhost:9481/stats/history?limit=10
+```
+
+**Health check:**
+```bash
+curl http://localhost:9481/healthcheck
+```
+
+## Configuration
+
+### Example Default Configuration
+
 ```json
 {
-  "load_test_specs": [
-    {
-      "name": "example-load-test",
-      "nats_url": "nats://localhost:4222",
-      // ... complete configuration
-    }
-  ],
-  "repeat_policy": { "enabled": false },
-  "storage": { "type": "badger", "path": "./test_stats.db" },
-  "stats_collection_interval_seconds": 5
-}
-```
-
-**Error Responses:**
-- `404 Not Found` - No configuration currently set
-
-### Statistics
-
-#### `GET /stats/history`
-Retrieve statistics history from the active collector.
-
-**Example Request:**
-```bash
-curl http://localhost:9481/stats/history
-```
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "timestamp": "2023-12-01T10:00:00Z",
-    "config_hash": "a1b2c3d4e5f6...",
-    "published": 5000,
-    "consumed": 4950,
-    "publish_rate": 100.5,
-    "consume_rate": 99.8,
-    "publish_errors": 2,
-    "consume_errors": 1,
-    "pending_messages": 50,
-    "latency": {
-      "count": 4950,
-      "min": 1500000,
-      "max": 15000000,
-      "mean": 3500000,
-      "p99": 12000000
+  "load_test_specs": [{
+    "name": "100-streams-3-replicas-immediate",
+    "nats_url": "nats://localhost:4222",
+    "nats_creds_file": "",
+    "use_jetstream": true,
+    "client_id_prefix": "load-tester",
+    "streams": [{
+      "name_prefix": "load_stream",
+      "count": 100,
+      "replicas": 3,
+      "subjects": ["test.subject.{}"],
+      "messages_per_stream_per_second": 1000,
+      "retention": "limits",
+      "max_age": "5m",
+      "storage": "memory",
+      "discard_new_per_subject": true,
+      "discard": "old",
+      "max_msgs": 100000,
+      "max_bytes": 104857600,
+      "max_msgs_per_subject": 10000,
+      "max_consumers": 50
+    }],
+    "publishers": {
+      "count_per_stream": 1,
+      "stream_name_prefix": "load_stream",
+      "publish_rate_per_second": 1000,
+      "publish_pattern": "steady",
+      "publish_burst_size": 1,
+      "message_size_bytes": 1024,
+      "track_latency": true
     },
-    "errors": []
-  }
-]
-```
-
-**Error Responses:**
-- `503 Service Unavailable` - No active collector available
-
-### Health Check
-
-#### `GET /health`
-Basic health check endpoint.
-
-**Example Request:**
-```bash
-curl http://localhost:9481/health
-```
-
-**Response:** `200 OK`
-```json
-{
-  "status": "healthy",
-  "time": "2023-12-01T10:00:00Z"
-}
-```
-
-## Configuration Schema
-
-> **⚠️ Strict Validation**: All configuration fields marked as "Required" must be provided with valid values. The system uses strict validation and will not apply defaults for missing fields. All numeric fields must be positive values where indicated.
-
-### Root Configuration
-```json
-{
-  "load_test_specs": [
-    {
-      "name": "example-test",
-      "nats_url": "nats://localhost:4222",
-      "use_jetstream": true,
-      "streams": [...],
-      "publishers": {...},
-      "consumers": {...},
-      "behavior": {...}
+    "consumers": {
+      "stream_name_prefix": "load_stream",
+      "type": "push",
+      "count_per_stream": 1,
+      "durable_name_prefix": "load_consumer",
+      "ack_wait_seconds": 30,
+      "max_ack_pending": 1000,
+      "consume_delay_ms": 0,
+      "ack_policy": "explicit"
+    },
+    "behavior": {
+      "duration_seconds": 600,
+      "ramp_up_seconds": 30
+    },
+    "log_limits": {
+      "max_lines": 200,
+      "max_bytes": 65536
     }
-  ],
+  }],
   "repeat_policy": {
-    "enabled": false
+    "enabled": true,
+    "streams": {
+      "count_multiplier": 2,
+      "replicas_multiplier": 1,
+      "messages_per_stream_per_second_multiplier": 1.5
+    },
+    "behavior": {
+      "duration_multiplier": 1.2,
+      "ramp_up_multiplier": 1.2
+    },
+    "consumers": {
+      "ack_wait_multiplier": 1.5,
+      "max_ack_pending_multiplier": 1.5,
+      "consume_delay_multiplier": 1
+    },
+    "publishers": {
+      "count_per_stream_multiplier": 1,
+      "publish_rate_multiplier": 1,
+      "message_size_bytes_multiplier": 1
+    }
   },
   "storage": {
-    "type": "badger",
-    "path": "./load_test_stats.db"
+    "type": "file",
+    "path": "/var/lib/lt/load_test_stats.log"
   },
   "stats_collection_interval_seconds": 5
 }
 ```
 
-| Field | Type | Description | Default |
-|-------|------|-------------|---------|
-| `load_test_specs` | `[]LoadTestSpec` | Array of load test configurations to execute sequentially | Required |
-| `repeat_policy` | `RepeatPolicy` | Configuration for repeating the last test spec with multipliers | Optional |
-| `storage` | `Storage` | Statistics storage configuration | `{"type": "badger", "path": "./load_test_stats.db"}` |
-| `stats_collection_interval_seconds` | `int64` | Interval for collecting statistics snapshots | `5` |
+### Root Configuration
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `load_test_specs` | `[]LoadTestSpec` | ✓ | - | Sequential load test configurations |
+| `repeat_policy` | `RepeatPolicy` | - | `{"enabled": false}` | Test repetition with scaling multipliers |
+| `storage` | `Storage` | - | `{"type": "badger", "path": "./load_test_stats.db"}` | Statistics storage backend |
+| `stats_collection_interval_seconds` | `int64` | - | `5` | Statistics collection interval |
 
 ### LoadTestSpec
-Individual load test configuration defining NATS connection, streams, publishers, consumers, and behavior.
 
-```json
-{
-  "name": "my-load-test",
-  "nats_url": "nats://localhost:4222",
-  "nats_creds_file": "/path/to/creds.json",
-  "use_jetstream": true,
-  "client_id_prefix": "load-tester",
-  "streams": [StreamConfig],
-  "publishers": PublisherConfig,
-  "consumers": ConsumerConfig,
-  "behavior": BehaviorConfig,
-  "log_limits": LogLimits
-}
-```
-
-| Field | Type | Description | Default |
-|-------|------|-------------|---------|
-| `name` | `string` | Unique identifier for this test configuration | Required |
-| `nats_url` | `string` | NATS server URL | Required |
-| `nats_creds_file` | `string` | Path to NATS credentials file | Optional |
-| `use_jetstream` | `bool` | Enable JetStream for persistent messaging | `false` |
-| `client_id_prefix` | `string` | Prefix for NATS client IDs | `"load-tester"` |
-| `streams` | `[]StreamConfig` | JetStream stream configurations | Required |
-| `publishers` | `PublisherConfig` | Publisher configuration | Required |
-| `consumers` | `ConsumerConfig` | Consumer configuration | Required |
-| `behavior` | `BehaviorConfig` | Test execution behavior settings | Required |
-| `log_limits` | `LogLimits` | Logging constraints | Optional |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | `string` | ✓ | - | Unique test identifier |
+| `nats_url` | `string` | ✓ | - | NATS server connection URL |
+| `nats_creds_file` | `string` | - | `""` | NATS credentials file path |
+| `use_jetstream` | `bool` | - | `false` | Enable JetStream for persistence |
+| `client_id_prefix` | `string` | - | `"load-tester"` | NATS client ID prefix |
+| `streams` | `[]StreamConfig` | ✓ | - | JetStream stream definitions |
+| `publishers` | `PublisherConfig` | ✓ | - | Message publisher configuration |
+| `consumers` | `ConsumerConfig` | ✓ | - | Message consumer configuration |
+| `behavior` | `BehaviorConfig` | ✓ | - | Test execution behavior |
+| `log_limits` | `LogLimits` | - | - | Logging constraints |
 
 ### StreamConfig
-JetStream stream configuration defining subjects, replication, message throughput, and NATS stream properties.
 
-```json
-{
-  "name_prefix": "test-stream",
-  "count": 3,
-  "replicas": 3,
-  "subjects": ["orders.{}", "payments.{}"],
-  "messages_per_stream_per_second": 1000,
-  "retention": "limits",
-  "max_age": "5m",
-  "storage": "memory",
-  "discard_new_per_subject": true,
-  "discard": "old",
-  "max_msgs": 100000,
-  "max_bytes": 104857600,
-  "max_msgs_per_subject": 10000,
-  "max_consumers": 50
-}
-```
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name_prefix` | `string` | ✓ | - | Stream name prefix (indexed: stream_1, stream_2...) |
+| `count` | `int32` | ✓ | - | Number of streams to create |
+| `replicas` | `int32` | ✓ | - | JetStream replication factor |
+| `subjects` | `[]string` | ✓ | - | NATS subjects (`{}` = stream index placeholder) |
+| `messages_per_stream_per_second` | `int64` | ✓ | - | Target message throughput per stream |
+| `retention` | `string` | - | `"limits"` | Retention: `limits`, `interest`, `workqueue` |
+| `max_age` | `string` | - | `"1m"` | Message TTL (e.g., `5m`, `2h30m`, `24h`) |
+| `storage` | `string` | - | `"memory"` | Storage: `memory`, `file` |
+| `discard_new_per_subject` | `*bool` | - | `true` | Discard new messages per subject at limits |
+| `discard` | `string` | - | `"old"` | Discard policy: `old`, `new` |
+| `max_msgs` | `*int64` | - | `-1` | Max message count (-1 = unlimited) |
+| `max_bytes` | `*int64` | - | `-1` | Max storage bytes (-1 = unlimited) |
+| `max_msgs_per_subject` | `*int64` | - | `-1` | Max messages per subject (-1 = unlimited) |
+| `max_consumers` | `*int` | - | `-1` | Max consumers allowed (-1 = unlimited) |
 
-| Field | Type | Description | Required |
-|-------|------|-------------|----------|
-| `name_prefix` | `string` | Prefix for generated stream names | Yes |
-| `count` | `int` | Number of streams to create | Yes |
-| `replicas` | `int` | JetStream replica count per stream | Yes |
-| `subjects` | `[]string` | NATS subjects for the streams. Use `{}` placeholders for indexed subjects (automatically converted to `%d` format), or static subjects without placeholders. | Yes |
-| `messages_per_stream_per_second` | `int64` | Target message rate per stream | Yes |
-| `retention` | `string` | Stream retention policy: `"limits"`, `"interest"`, or `"workqueue"` | No (defaults to `"limits"`) |
-| `max_age` | `string` | Maximum age of messages (duration format, e.g., `"5m"`, `"2h30m"`, `"24h"`) | No (defaults to `"1m"`) |
-| `storage` | `string` | Storage type: `"file"` or `"memory"` | No (defaults to `"memory"`) |
-| `discard_new_per_subject` | `bool` | Whether to discard new messages per subject when limits are reached | No (defaults to `true`) |
-| `discard` | `string` | Discard policy when stream reaches limits: `"old"` or `"new"` | No (defaults to `"old"`) |
-| `max_msgs` | `int64` | Maximum number of messages in the stream (-1 for unlimited) | No (defaults to `-1` unlimited) |
-| `max_bytes` | `int64` | Maximum total size of messages in bytes (-1 for unlimited) | No (defaults to `-1` unlimited) |
-| `max_msgs_per_subject` | `int64` | Maximum messages per individual subject (-1 for unlimited) | No (defaults to `-1` unlimited) |
-| `max_consumers` | `int` | Maximum number of consumers allowed on this stream (-1 for unlimited) | No (defaults to `-1` unlimited) |
-
-#### Stream Configuration Options
-
-**Retention Policies:**
-- `"limits"` - Messages are retained until stream reaches configured limits (messages, bytes, age)
-- `"interest"` - Messages are removed once acknowledged by all consumers
-- `"workqueue"` - Messages are removed once consumed by any consumer (work queue pattern)
-
-**Storage Types:**
-- `"memory"` - Fast in-memory storage (lost on restart)
-- `"file"` - Persistent file-based storage (survives restarts)
-
-**Discard Policies:**
-- `"old"` - Remove oldest messages when limits are reached
-- `"new"` - Reject new messages when limits are reached
-
-**Duration Format:**
-The `max_age` field accepts Go duration format strings:
-- `"30s"` - 30 seconds  
-- `"5m"` - 5 minutes
-- `"2h30m"` - 2 hours and 30 minutes
-- `"24h"` - 24 hours
-- `"168h"` - 7 days (1 week)
-
-**Stream Limits:**
-Use the message and byte limits to control stream resource usage:
-- `max_msgs`: Total message count limit (useful for memory management)
-- `max_bytes`: Total storage size limit in bytes (e.g., `1048576` for 1MB)
-- `max_msgs_per_subject`: Per-subject message limit (useful with wildcard subjects)
-- `max_consumers`: Limit concurrent consumers (useful for resource control)
-
-Setting any limit to `-1` means unlimited (default behavior). When limits are reached, the `discard` policy determines whether to remove old messages or reject new ones.
+**Stream limits:** Control resource usage and test backpressure scenarios. Memory streams need `max_msgs`/`max_bytes` to prevent OOM. Per-subject limits test wildcard subject behavior.
 
 ### PublisherConfig
-Configuration for message publishers that write to JetStream.
 
-```json
-{
-  "count_per_stream": 2,
-  "stream_name_prefix": "test-stream",
-  "publish_rate_per_second": 500,
-  "publish_pattern": "steady",
-  "publish_burst_size": 1,
-  "message_size_bytes": 1024,
-  "track_latency": true
-}
-```
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `count_per_stream` | `int32` | ✓ | - | Publishers per stream |
+| `stream_name_prefix` | `string` | ✓ | - | Target stream prefix to match |
+| `publish_rate_per_second` | `int32` | ✓ | - | Messages/sec per publisher |
+| `publish_pattern` | `string` | ✓ | - | Pattern: `steady`, `random` |
+| `publish_burst_size` | `int32` | ✓ | - | Burst size for random pattern |
+| `message_size_bytes` | `int32` | ✓ | - | Message payload size |
+| `track_latency` | `bool` | ✓ | - | Enable end-to-end latency tracking |
 
-| Field | Type | Description | Required |
-|-------|------|-------------|----------|
-| `count_per_stream` | `int` | Number of publishers per stream | Yes |
-| `stream_name_prefix` | `string` | Prefix to match target streams | Yes |
-| `publish_rate_per_second` | `int` | Messages per second per publisher | Yes |
-| `publish_pattern` | `string` | Message publishing pattern: "steady" or "random" | Yes |
-| `publish_burst_size` | `int` | Number of messages to send in burst when using random pattern | Yes |
-| `message_size_bytes` | `int` | Size of published messages | Yes |
-| `track_latency` | `bool` | Enable end-to-end latency measurement | Yes |
+`count_per_stream` scales publishers with streams. `publish_pattern` tests different load characteristics. `track_latency` measures E2E performance but adds overhead.
 
 ### ConsumerConfig
-Configuration for message consumers that read from JetStream.
 
-```json
-{
-  "stream_name_prefix": "test-stream",
-  "type": "push",
-  "count_per_stream": 1,
-  "durable_name_prefix": "load_consumer",
-  "ack_wait_seconds": 30,
-  "max_ack_pending": 1000,
-  "consume_delay_ms": 0,
-  "ack_policy": "explicit"
-}
-```
-
-| Field | Type | Description | Required |
-|-------|------|-------------|----------|
-| `stream_name_prefix` | `string` | Prefix to match source streams | Yes |
-| `type` | `string` | Consumer type: "push" or "pull" | Yes |
-| `count_per_stream` | `int` | Number of consumers per stream | Yes |
-| `durable_name_prefix` | `string` | Prefix for durable consumer names | Yes |
-| `ack_wait_seconds` | `int64` | Acknowledgment timeout in seconds | Yes |
-| `max_ack_pending` | `int` | Maximum unacknowledged messages | Yes |
-| `consume_delay_ms` | `int64` | Artificial delay between message processing | No |
-| `ack_policy` | `string` | JetStream ack policy: "explicit", "none", "all" | Yes |
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `stream_name_prefix` | `string` | ✓ | - | Source stream prefix to match |
+| `type` | `string` | ✓ | - | Consumer type: `push`, `pull` |
+| `count_per_stream` | `int32` | ✓ | - | Consumers per stream |
+| `durable_name_prefix` | `string` | ✓ | - | Durable consumer name prefix |
+| `ack_wait_seconds` | `int64` | ✓ | - | Message acknowledgment timeout |
+| `max_ack_pending` | `int32` | ✓ | - | Max unacknowledged messages |
+| `consume_delay_ms` | `int64` | - | `0` | Artificial processing delay |
+| `ack_policy` | `string` | ✓ | - | Ack policy: `explicit`, `none`, `all` |
 
 ### BehaviorConfig
-Test execution timing and behavior configuration.
 
-```json
-{
-  "duration_seconds": 300,
-  "ramp_up_seconds": 30
-}
-```
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `duration_seconds` | `int64` | ✓ | - | Total test duration |
+| `ramp_up_seconds` | `int64` | ✓ | - | Gradual rate increase period |
 
-| Field | Type | Description | Required |
-|-------|------|-------------|----------|
-| `duration_seconds` | `int64` | Total test duration in seconds | Yes |
-| `ramp_up_seconds` | `int64` | Gradual ramp-up period for publishers/consumers | Yes |
+Ramp-up prevents connection storms and allows system warm-up for realistic performance testing.
 
 ### Storage
-Statistics storage backend configuration with multiple options for persistence and output.
 
-```json
-{
-  "type": "badger",
-  "path": "/data/stats.db"
-}
-```
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | `string` | - | `"badger"` | Storage: `file`, `badger`, `stdout` |
+| `path` | `string` | - | `"./load_test_stats.db"` | Storage location |
 
-| Field | Type | Description | Default |
-|-------|------|-------------|---------|
-| `type` | `string` | Storage backend type | `"badger"` |
-| `path` | `string` | Storage location | `"./load_test_stats.db"` |
-
-#### Storage Types
-
-**`"file"`** - Human-readable file output
-- **Path**: File path for statistics output
-- **Format**: Structured text with timestamps, metrics, and latency data
-- **Use Case**: Development, debugging, simple deployments
-- **Example**: `{"type": "file", "path": "./load_test_stats.log"}`
-
-**`"badger"`** - BadgerDB embedded database (default)
-- **Path**: Directory path for BadgerDB storage
-- **Format**: Structured JSON with automatic TTL and garbage collection
-- **Features**:
-  - Stats data TTL: 24 hours
-  - Config data TTL: 7 days
-  - Failure data TTL: 72 hours
-  - Automatic value log garbage collection
-  - Singleton pattern prevents multiple database opens
-- **Use Case**: Production deployments, persistent storage, high-throughput scenarios
-- **Example**: `{"type": "badger", "path": "/data/stats.db"}`
-
-**`"stdout"`** - Console output (special file case)
-- **Path**: Uses `/dev/stdout` internally
-- **Format**: Same as file but outputs to console
-- **Use Case**: Containerized environments, CI/CD pipelines, debugging
-- **Example**: `{"type": "stdout", "path": ""}`
+**Storage types:**
+- `file`: Human-readable logs (default) for debugging
+- `badger`: Production embedded DB with TTL and GC
+- `stdout`: Container/CI-friendly console output
 
 ### RepeatPolicy
-Configuration for repeating tests with scaled parameters.
 
-```json
-{
-  "enabled": true,
-  "streams": {
-    "count_multiplier": 1.5,
-    "replicas_multiplier": 1.0,
-    "messages_per_stream_per_second_multiplier": 2.0
-  },
-  "behavior": {
-    "duration_multiplier": 1.0,
-    "ramp_up_multiplier": 1.0
-  },
-  "consumers": {
-    "ack_wait_multiplier": 1.0,
-    "max_ack_pending_multiplier": 1.0,
-    "consume_delay_multiplier": 1.0
-  },
-  "publishers": {
-    "count_per_stream_multiplier": 1.0,
-    "publish_rate_multiplier": 1.5,
-    "message_size_bytes_multiplier": 1.0
-  }
-}
-```
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | `bool` | - | `false` | Enable test repetition with scaling |
+| `streams.*_multiplier` | `float64` | - | `1.0` | Stream parameter scaling factors |
+| `publishers.*_multiplier` | `float64` | - | `1.0` | Publisher parameter scaling factors |
+| `consumers.*_multiplier` | `float64` | - | `1.0` | Consumer parameter scaling factors |
+| `behavior.*_multiplier` | `float64` | - | `1.0` | Behavior parameter scaling factors |
 
-All multiplier fields are `float64` values that scale the corresponding configuration parameters when repeating the last test specification.
+Automated stress testing by progressively increasing load parameters without manual configuration changes.
+
+## TODO
+
+- [ ] **Enhanced Metrics System**: Implement comprehensive metrics collection including system resources (CPU, memory, goroutines), NATS-specific metrics (connection health, bytes in/out), JetStream performance (storage usage, cluster status), enhanced latency analysis (P50, P90, P95, P99.9, P99.99 percentiles), throughput trends, error categorization, and test progress tracking. Add Prometheus export, real-time WebSocket streaming, and comparative analysis capabilities for production-grade observability.
