@@ -20,7 +20,7 @@ type PublisherConfig struct {
 	MessageSize      int32
 	PublishRate      int32
 	TrackLatency     bool // TODO: track latency between publishes/acks
-	PublishPattern   config.PublishPattern
+	PublishPattern   string
 	PublishBurstSize int32
 	UseJetStream     bool
 }
@@ -78,10 +78,13 @@ func (p *Publisher) Start(ctx context.Context) error {
 	// Start with a rate of 1/s, will be updated during ramp-up
 	p.currentRate.Store(1)
 
-	ticker := time.NewTicker(60 * time.Second)
-	if err := p.updateTicker(ticker, p.GetCurrentRate()); err != nil {
-		p.logger.Error("failed to set initial ticker", zap.Error(err))
+	initialInterval, err := p.calculatePublishInterval(p.GetCurrentRate())
+	if err != nil {
+		p.logger.Error("failed to calculate initial interval", zap.Error(err))
+		return err
 	}
+
+	ticker := time.NewTicker(initialInterval)
 
 	lastRate := p.GetCurrentRate()
 

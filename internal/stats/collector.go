@@ -235,6 +235,7 @@ func (c *Collector) calculateLatencyStats(latencies []time.Duration) LatencyStat
 }
 
 func (c *Collector) Start(ctx context.Context, statsInterval time.Duration) {
+	c.logger.Info("Starting stats collector", zap.Duration("interval", statsInterval))
 	ticker := time.NewTicker(statsInterval)
 	defer ticker.Stop()
 

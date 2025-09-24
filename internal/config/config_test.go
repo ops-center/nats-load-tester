@@ -3,6 +3,9 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 func TestStreamSynchronizationValidation(t *testing.T) {
@@ -25,7 +28,6 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 						Replicas:                   1,
 						Subjects:                   []string{"test.subject.{}"},
 						MessagesPerStreamPerSecond: 100,
-						MessageSizeBytes:           256,
 					},
 				},
 				Publishers: PublisherConfig{
@@ -66,7 +68,6 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 						Replicas:                   1,
 						Subjects:                   []string{"test.subject.{}"},
 						MessagesPerStreamPerSecond: 100,
-						MessageSizeBytes:           256,
 					},
 				},
 				Publishers: PublisherConfig{
@@ -108,7 +109,6 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 						Replicas:                   1,
 						Subjects:                   []string{"test.subject.{}"},
 						MessagesPerStreamPerSecond: 100,
-						MessageSizeBytes:           256,
 					},
 				},
 				Publishers: PublisherConfig{
@@ -150,7 +150,6 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 						Replicas:                   1,
 						Subjects:                   []string{"test.subject.static"},
 						MessagesPerStreamPerSecond: 100,
-						MessageSizeBytes:           256,
 					},
 				},
 				Publishers: PublisherConfig{
@@ -191,7 +190,6 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 						Replicas:                   1,
 						Subjects:                   []string{"test.subject.{}"},
 						MessagesPerStreamPerSecond: 100,
-						MessageSizeBytes:           256,
 					},
 				},
 				Publishers: PublisherConfig{
@@ -270,7 +268,6 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}", "test.other.{}"},
 				MessagesPerStreamPerSecond: 100,
-				MessageSizeBytes:           256,
 			},
 			testCases: []struct {
 				subjectIndex int32
@@ -291,7 +288,6 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 				Replicas:                   1,
 				Subjects:                   []string{"static.subject", "another.static"},
 				MessagesPerStreamPerSecond: 100,
-				MessageSizeBytes:           256,
 			},
 			testCases: []struct {
 				subjectIndex int32
@@ -332,4 +328,474 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStreamConfigValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		stream    StreamSpec
+		wantError bool
+		errorMsg  string
+	}{
+		{
+			name: "valid stream with all configurable options",
+			stream: StreamSpec{
+				NamePrefix:                 "test_stream",
+				Count:                      1,
+				Replicas:                   1,
+				Subjects:                   []string{"test.subject.{}"},
+				MessagesPerStreamPerSecond: 100,
+				Retention:                  RetentionLimits,
+				MaxAge:                     "30m",
+				Storage:                    StorageFile,
+				DiscardNewPerSubject:       &[]bool{false}[0], // pointer to false
+				Discard:                    DiscardNew,
+				MaxMsgs:                    &[]int64{1000}[0],
+				MaxBytes:                   &[]int64{1024 * 1024}[0], // 1MB
+				MaxMsgsPerSubject:          &[]int64{100}[0],
+				MaxConsumers:               &[]int{10}[0],
+			},
+			wantError: false,
+		},
+		{
+			name: "valid stream with defaults (empty optional fields)",
+			stream: StreamSpec{
+				NamePrefix:                 "test_stream",
+				Count:                      1,
+				Replicas:                   1,
+				Subjects:                   []string{"test.subject.{}"},
+				MessagesPerStreamPerSecond: 100,
+			},
+			wantError: false,
+		},
+		{
+			name: "invalid retention policy",
+			stream: StreamSpec{
+				NamePrefix:                 "test_stream",
+				Count:                      1,
+				Replicas:                   1,
+				Subjects:                   []string{"test.subject.{}"},
+				MessagesPerStreamPerSecond: 100,
+				Retention:                  "invalid_retention",
+			},
+			wantError: true,
+			errorMsg:  "retention must be",
+		},
+		{
+			name: "invalid storage type",
+			stream: StreamSpec{
+				NamePrefix:                 "test_stream",
+				Count:                      1,
+				Replicas:                   1,
+				Subjects:                   []string{"test.subject.{}"},
+				MessagesPerStreamPerSecond: 100,
+				Storage:                    "invalid_storage",
+			},
+			wantError: true,
+			errorMsg:  "storage must be",
+		},
+		{
+			name: "invalid discard policy",
+			stream: StreamSpec{
+				NamePrefix:                 "test_stream",
+				Count:                      1,
+				Replicas:                   1,
+				Subjects:                   []string{"test.subject.{}"},
+				MessagesPerStreamPerSecond: 100,
+				Discard:                    "invalid_discard",
+			},
+			wantError: true,
+			errorMsg:  "discard must be",
+		},
+		{
+			name: "invalid max_age duration",
+			stream: StreamSpec{
+				NamePrefix:                 "test_stream",
+				Count:                      1,
+				Replicas:                   1,
+				Subjects:                   []string{"test.subject.{}"},
+				MessagesPerStreamPerSecond: 100,
+				MaxAge:                     "invalid_duration",
+			},
+			wantError: true,
+			errorMsg:  "max_age must be a valid duration string",
+		},
+		{
+			name: "valid complex duration formats",
+			stream: StreamSpec{
+				NamePrefix:                 "test_stream",
+				Count:                      1,
+				Replicas:                   1,
+				Subjects:                   []string{"test.subject.{}"},
+				MessagesPerStreamPerSecond: 100,
+				MaxAge:                     "1h30m45s",
+			},
+			wantError: false,
+		},
+		{
+			name: "invalid max_msgs (too negative)",
+			stream: StreamSpec{
+				NamePrefix:                 "test_stream",
+				Count:                      1,
+				Replicas:                   1,
+				Subjects:                   []string{"test.subject.{}"},
+				MessagesPerStreamPerSecond: 100,
+				MaxMsgs:                    &[]int64{-5}[0],
+			},
+			wantError: true,
+			errorMsg:  "max_msgs must be -1 (unlimited) or non-negative",
+		},
+		{
+			name: "invalid max_bytes (too negative)",
+			stream: StreamSpec{
+				NamePrefix:                 "test_stream",
+				Count:                      1,
+				Replicas:                   1,
+				Subjects:                   []string{"test.subject.{}"},
+				MessagesPerStreamPerSecond: 100,
+				MaxBytes:                   &[]int64{-10}[0],
+			},
+			wantError: true,
+			errorMsg:  "max_bytes must be -1 (unlimited) or non-negative",
+		},
+		{
+			name: "valid unlimited values (-1)",
+			stream: StreamSpec{
+				NamePrefix:                 "test_stream",
+				Count:                      1,
+				Replicas:                   1,
+				Subjects:                   []string{"test.subject.{}"},
+				MessagesPerStreamPerSecond: 100,
+				MaxMsgs:                    &[]int64{-1}[0],
+				MaxBytes:                   &[]int64{-1}[0],
+				MaxMsgsPerSubject:          &[]int64{-1}[0],
+				MaxConsumers:               &[]int{-1}[0],
+			},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.stream.Validate()
+
+			if tt.wantError {
+				if err == nil {
+					t.Errorf("expected error but got none")
+					return
+				}
+				if tt.errorMsg != "" && !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("expected error containing '%s', got '%s'", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected no error but got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestStreamSpecGetterMethods(t *testing.T) {
+	t.Run("GetRetentionPolicy", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			stream   StreamSpec
+			expected nats.RetentionPolicy
+		}{
+			{
+				name:     "limits policy",
+				stream:   StreamSpec{Retention: RetentionLimits},
+				expected: nats.LimitsPolicy,
+			},
+			{
+				name:     "interest policy",
+				stream:   StreamSpec{Retention: RetentionInterest},
+				expected: nats.InterestPolicy,
+			},
+			{
+				name:     "workqueue policy",
+				stream:   StreamSpec{Retention: RetentionWorkQueue},
+				expected: nats.WorkQueuePolicy,
+			},
+			{
+				name:     "empty defaults to limits",
+				stream:   StreamSpec{Retention: ""},
+				expected: nats.LimitsPolicy,
+			},
+			{
+				name:     "invalid defaults to limits",
+				stream:   StreamSpec{Retention: "invalid"},
+				expected: nats.LimitsPolicy,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := tt.stream.GetRetentionPolicy()
+				if result != tt.expected {
+					t.Errorf("GetRetentionPolicy() = %v, expected %v", result, tt.expected)
+				}
+			})
+		}
+	})
+
+	t.Run("GetStorageType", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			stream   StreamSpec
+			expected nats.StorageType
+		}{
+			{
+				name:     "file storage",
+				stream:   StreamSpec{Storage: StorageFile},
+				expected: nats.FileStorage,
+			},
+			{
+				name:     "memory storage",
+				stream:   StreamSpec{Storage: StorageMemory},
+				expected: nats.MemoryStorage,
+			},
+			{
+				name:     "empty defaults to memory",
+				stream:   StreamSpec{Storage: ""},
+				expected: nats.MemoryStorage,
+			},
+			{
+				name:     "invalid defaults to memory",
+				stream:   StreamSpec{Storage: "invalid"},
+				expected: nats.MemoryStorage,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := tt.stream.GetStorageType()
+				if result != tt.expected {
+					t.Errorf("GetStorageType() = %v, expected %v", result, tt.expected)
+				}
+			})
+		}
+	})
+
+	t.Run("GetDiscardPolicy", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			stream   StreamSpec
+			expected nats.DiscardPolicy
+		}{
+			{
+				name:     "discard old",
+				stream:   StreamSpec{Discard: DiscardOld},
+				expected: nats.DiscardOld,
+			},
+			{
+				name:     "discard new",
+				stream:   StreamSpec{Discard: DiscardNew},
+				expected: nats.DiscardNew,
+			},
+			{
+				name:     "empty defaults to old",
+				stream:   StreamSpec{Discard: ""},
+				expected: nats.DiscardOld,
+			},
+			{
+				name:     "invalid defaults to old",
+				stream:   StreamSpec{Discard: "invalid"},
+				expected: nats.DiscardOld,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := tt.stream.GetDiscardPolicy()
+				if result != tt.expected {
+					t.Errorf("GetDiscardPolicy() = %v, expected %v", result, tt.expected)
+				}
+			})
+		}
+	})
+
+	t.Run("GetMaxAge", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			stream   StreamSpec
+			expected time.Duration
+		}{
+			{
+				name:     "valid duration",
+				stream:   StreamSpec{MaxAge: "30m"},
+				expected: 30 * time.Minute,
+			},
+			{
+				name:     "complex duration",
+				stream:   StreamSpec{MaxAge: "1h30m45s"},
+				expected: 1*time.Hour + 30*time.Minute + 45*time.Second,
+			},
+			{
+				name:     "empty defaults to 1 minute",
+				stream:   StreamSpec{MaxAge: ""},
+				expected: 1 * time.Minute,
+			},
+			{
+				name:     "invalid defaults to 1 minute",
+				stream:   StreamSpec{MaxAge: "invalid"},
+				expected: 1 * time.Minute,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := tt.stream.GetMaxAge()
+				if result != tt.expected {
+					t.Errorf("GetMaxAge() = %v, expected %v", result, tt.expected)
+				}
+			})
+		}
+	})
+
+	t.Run("GetDiscardNewPerSubject", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			stream   StreamSpec
+			expected bool
+		}{
+			{
+				name:     "nil defaults to true",
+				stream:   StreamSpec{DiscardNewPerSubject: nil},
+				expected: true,
+			},
+			{
+				name:     "explicit true",
+				stream:   StreamSpec{DiscardNewPerSubject: &[]bool{true}[0]},
+				expected: true,
+			},
+			{
+				name:     "explicit false",
+				stream:   StreamSpec{DiscardNewPerSubject: &[]bool{false}[0]},
+				expected: false,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := tt.stream.GetDiscardNewPerSubject()
+				if result != tt.expected {
+					t.Errorf("GetDiscardNewPerSubject() = %v, expected %v", result, tt.expected)
+				}
+			})
+		}
+	})
+
+	t.Run("GetMaxMsgs", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			stream   StreamSpec
+			expected int64
+		}{
+			{
+				name:     "nil defaults to -1",
+				stream:   StreamSpec{MaxMsgs: nil},
+				expected: -1,
+			},
+			{
+				name:     "explicit value",
+				stream:   StreamSpec{MaxMsgs: &[]int64{1000}[0]},
+				expected: 1000,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := tt.stream.GetMaxMsgs()
+				if result != tt.expected {
+					t.Errorf("GetMaxMsgs() = %v, expected %v", result, tt.expected)
+				}
+			})
+		}
+	})
+
+	t.Run("GetMaxBytes", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			stream   StreamSpec
+			expected int64
+		}{
+			{
+				name:     "nil defaults to -1",
+				stream:   StreamSpec{MaxBytes: nil},
+				expected: -1,
+			},
+			{
+				name:     "explicit value",
+				stream:   StreamSpec{MaxBytes: &[]int64{1024 * 1024}[0]}, // 1MB
+				expected: 1024 * 1024,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := tt.stream.GetMaxBytes()
+				if result != tt.expected {
+					t.Errorf("GetMaxBytes() = %v, expected %v", result, tt.expected)
+				}
+			})
+		}
+	})
+
+	t.Run("GetMaxMsgsPerSubject", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			stream   StreamSpec
+			expected int64
+		}{
+			{
+				name:     "nil defaults to -1",
+				stream:   StreamSpec{MaxMsgsPerSubject: nil},
+				expected: -1,
+			},
+			{
+				name:     "explicit value",
+				stream:   StreamSpec{MaxMsgsPerSubject: &[]int64{500}[0]},
+				expected: 500,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := tt.stream.GetMaxMsgsPerSubject()
+				if result != tt.expected {
+					t.Errorf("GetMaxMsgsPerSubject() = %v, expected %v", result, tt.expected)
+				}
+			})
+		}
+	})
+
+	t.Run("GetMaxConsumers", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			stream   StreamSpec
+			expected int
+		}{
+			{
+				name:     "nil defaults to -1",
+				stream:   StreamSpec{MaxConsumers: nil},
+				expected: -1,
+			},
+			{
+				name:     "explicit value",
+				stream:   StreamSpec{MaxConsumers: &[]int{10}[0]},
+				expected: 10,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := tt.stream.GetMaxConsumers()
+				if result != tt.expected {
+					t.Errorf("GetMaxConsumers() = %v, expected %v", result, tt.expected)
+				}
+			})
+		}
+	})
 }

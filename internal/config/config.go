@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 // Validation constants
@@ -38,11 +40,29 @@ type LoadTestSpec struct {
 	LogLimits      LogLimits       `json:"log_limits"`
 }
 
-type PublishPattern string
-
+// Publisher publish patterns
 const (
-	PublishPatternSteady PublishPattern = "steady"
-	PublishPatternRandom PublishPattern = "random"
+	PublishPatternSteady string = "steady"
+	PublishPatternRandom string = "random"
+)
+
+// Stream retention policies
+const (
+	RetentionLimits    = "limits"
+	RetentionInterest  = "interest"
+	RetentionWorkQueue = "workqueue"
+)
+
+// Stream storage types
+const (
+	StorageFile   = "file"
+	StorageMemory = "memory"
+)
+
+// Stream discard policies
+const (
+	DiscardOld = "old"
+	DiscardNew = "new"
 )
 
 type StreamSpec struct {
@@ -51,19 +71,27 @@ type StreamSpec struct {
 	Replicas                   int32    `json:"replicas"`
 	Subjects                   []string `json:"subjects"`
 	MessagesPerStreamPerSecond int64    `json:"messages_per_stream_per_second"`
-	// not implemented
-	MessageSizeBytes int64 `json:"message_size_bytes"`
+
+	// Stream configuration options (optional with defaults)
+	Retention            string `json:"retention,omitempty"`               // "limits", "interest", "workqueue" - defaults to "limits"
+	MaxAge               string `json:"max_age,omitempty"`                 // duration string like "1h", "30m" - defaults to "1m"
+	Storage              string `json:"storage,omitempty"`                 // "file", "memory" - defaults to "memory"
+	DiscardNewPerSubject *bool  `json:"discard_new_per_subject,omitempty"` // defaults to true
+	Discard              string `json:"discard,omitempty"`                 // "old", "new" - defaults to "old"
+	MaxMsgs              *int64 `json:"max_msgs,omitempty"`                // maximum number of messages - defaults to -1 (unlimited)
+	MaxBytes             *int64 `json:"max_bytes,omitempty"`               // maximum total size of messages - defaults to -1 (unlimited)
+	MaxMsgsPerSubject    *int64 `json:"max_msgs_per_subject,omitempty"`    // maximum messages per subject - defaults to -1 (unlimited)
+	MaxConsumers         *int   `json:"max_consumers,omitempty"`           // maximum number of consumers - defaults to -1 (unlimited)
 }
 
 type PublisherConfig struct {
-	CountPerStream       int32          `json:"count_per_stream"`
-	StreamNamePrefix     string         `json:"stream_name_prefix"`
-	PublishRatePerSecond int32          `json:"publish_rate_per_second"`
-	PublishPattern       PublishPattern `json:"publish_pattern"`
-	PublishBurstSize     int32          `json:"publish_burst_size"`
-	MessageSizeBytes     int32          `json:"message_size_bytes"`
-	// not implemented
-	TrackLatency bool `json:"track_latency"`
+	CountPerStream       int32  `json:"count_per_stream"`
+	StreamNamePrefix     string `json:"stream_name_prefix"`
+	PublishRatePerSecond int32  `json:"publish_rate_per_second"`
+	PublishPattern       string `json:"publish_pattern"`
+	PublishBurstSize     int32  `json:"publish_burst_size"`
+	MessageSizeBytes     int32  `json:"message_size_bytes"`
+	TrackLatency         bool   `json:"track_latency"`
 }
 
 type ConsumerConfig struct {
@@ -214,8 +242,40 @@ func (s *StreamSpec) Validate() error {
 		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("messages_per_stream_per_second must be positive, got %d", s.MessagesPerStreamPerSecond))
 	}
 
-	if s.MessageSizeBytes <= 0 {
-		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("message_size_bytes must be positive, got %d", s.MessageSizeBytes))
+	// Validate optional stream configuration fields
+	if s.Retention != "" && s.Retention != RetentionLimits && s.Retention != RetentionInterest && s.Retention != RetentionWorkQueue {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("retention must be '%s', '%s', or '%s', got '%s'", RetentionLimits, RetentionInterest, RetentionWorkQueue, s.Retention))
+	}
+
+	if s.Storage != "" && s.Storage != StorageFile && s.Storage != StorageMemory {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("storage must be '%s' or '%s', got '%s'", StorageFile, StorageMemory, s.Storage))
+	}
+
+	if s.Discard != "" && s.Discard != DiscardOld && s.Discard != DiscardNew {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("discard must be '%s' or '%s', got '%s'", DiscardOld, DiscardNew, s.Discard))
+	}
+
+	if s.MaxAge != "" {
+		if _, err := time.ParseDuration(s.MaxAge); err != nil {
+			streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_age must be a valid duration string (e.g., '1h', '30m'), got '%s': %w", s.MaxAge, err))
+		}
+	}
+
+	// Validate numeric limits (should be non-negative when provided)
+	if s.MaxMsgs != nil && *s.MaxMsgs < -1 {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_msgs must be -1 (unlimited) or non-negative, got %d", *s.MaxMsgs))
+	}
+
+	if s.MaxBytes != nil && *s.MaxBytes < -1 {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_bytes must be -1 (unlimited) or non-negative, got %d", *s.MaxBytes))
+	}
+
+	if s.MaxMsgsPerSubject != nil && *s.MaxMsgsPerSubject < -1 {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_msgs_per_subject must be -1 (unlimited) or non-negative, got %d", *s.MaxMsgsPerSubject))
+	}
+
+	if s.MaxConsumers != nil && *s.MaxConsumers < -1 {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_consumers must be -1 (unlimited) or non-negative, got %d", *s.MaxConsumers))
 	}
 
 	if len(streamValidationErrors) > 0 {
@@ -414,4 +474,90 @@ func (s *StreamSpec) GetFormattedSubjects(streamIndex int32) []string {
 		subjects[i] = s.FormatSubject(int32(i), streamIndex)
 	}
 	return subjects
+}
+
+// Stream configuration methods that return NATS types
+
+// GetRetentionPolicy returns the appropriate nats.RetentionPolicy for this stream
+func (s *StreamSpec) GetRetentionPolicy() nats.RetentionPolicy {
+	switch s.Retention {
+	case RetentionInterest:
+		return nats.InterestPolicy
+	case RetentionWorkQueue:
+		return nats.WorkQueuePolicy
+	default: // RetentionLimits or empty
+		return nats.LimitsPolicy
+	}
+}
+
+// GetStorageType returns the appropriate nats.StorageType for this stream
+func (s *StreamSpec) GetStorageType() nats.StorageType {
+	switch s.Storage {
+	case StorageFile:
+		return nats.FileStorage
+	default: // StorageMemory or empty
+		return nats.MemoryStorage
+	}
+}
+
+// GetDiscardPolicy returns the appropriate nats.DiscardPolicy for this stream
+func (s *StreamSpec) GetDiscardPolicy() nats.DiscardPolicy {
+	switch s.Discard {
+	case DiscardNew:
+		return nats.DiscardNew
+	default: // DiscardOld or empty
+		return nats.DiscardOld
+	}
+}
+
+// GetMaxAge returns the parsed max age duration, defaults to 1 minute if empty or invalid
+func (s *StreamSpec) GetMaxAge() time.Duration {
+	if s.MaxAge == "" {
+		return 1 * time.Minute
+	}
+	duration, err := time.ParseDuration(s.MaxAge)
+	if err != nil {
+		return 1 * time.Minute // fallback to default
+	}
+	return duration
+}
+
+// GetDiscardNewPerSubject returns the discard_new_per_subject setting, defaults to true if nil
+func (s *StreamSpec) GetDiscardNewPerSubject() bool {
+	if s.DiscardNewPerSubject == nil {
+		return true
+	}
+	return *s.DiscardNewPerSubject
+}
+
+// GetMaxMsgs returns the maximum number of messages, defaults to -1 (unlimited) if nil
+func (s *StreamSpec) GetMaxMsgs() int64 {
+	if s.MaxMsgs == nil {
+		return -1
+	}
+	return *s.MaxMsgs
+}
+
+// GetMaxBytes returns the maximum total size of messages, defaults to -1 (unlimited) if nil
+func (s *StreamSpec) GetMaxBytes() int64 {
+	if s.MaxBytes == nil {
+		return -1
+	}
+	return *s.MaxBytes
+}
+
+// GetMaxMsgsPerSubject returns the maximum messages per subject, defaults to -1 (unlimited) if nil
+func (s *StreamSpec) GetMaxMsgsPerSubject() int64 {
+	if s.MaxMsgsPerSubject == nil {
+		return -1
+	}
+	return *s.MaxMsgsPerSubject
+}
+
+// GetMaxConsumers returns the maximum number of consumers, defaults to -1 (unlimited) if nil
+func (s *StreamSpec) GetMaxConsumers() int {
+	if s.MaxConsumers == nil {
+		return -1
+	}
+	return *s.MaxConsumers
 }

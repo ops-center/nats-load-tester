@@ -37,16 +37,16 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.statsCollector.Start(ctx, statsInterval)
 	e.logger.Info("Starting engine with load test spec", zap.String("name", loadTestSpec.Name))
-
 	if err := e.connect(loadTestSpec); err != nil {
 		e.statsCollector.WriteFailure(err)
+		e.logger.Error("Failed to connect to NATS", zap.Error(err))
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
 	e.loadTestSpec = loadTestSpec
 	if err := e.statsCollector.SetConfig(loadTestSpec); err != nil {
+		e.logger.Error("Failed to set stats collector config", zap.Error(err))
 		return fmt.Errorf("failed to set stats collector config: %w", err)
 	}
 
@@ -56,8 +56,15 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	// Create errgroup with context
 	e.eg, engineCtx = errgroup.WithContext(engineCtx)
 
+	// Start stats collector in errgroup
+	e.eg.Go(func() error {
+		e.statsCollector.Start(engineCtx, statsInterval)
+		return nil
+	})
+
 	if loadTestSpec.UseJetStream {
 		if err := e.setupStreams(loadTestSpec); err != nil {
+			e.logger.Error("Failed to setup streams", zap.Error(err))
 			e.cleanup()
 			return fmt.Errorf("failed to setup streams: %w", err)
 		}
@@ -67,6 +74,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 
 	if err := e.startConsumers(engineCtx, loadTestSpec); err != nil {
 		e.cleanup()
+		e.logger.Error("Failed to start consumers", zap.Error(err))
 		return fmt.Errorf("failed to start consumers: %w", err)
 	}
 
@@ -150,12 +158,15 @@ func (e *Engine) setupStreams(loadTestSpec *config.LoadTestSpec) error {
 				Subjects: subjects,
 				Replicas: int(loadTestSpecStream.Replicas),
 
-				// TODO: make these configurable
-				Retention:            nats.LimitsPolicy,
-				MaxAge:               1 * time.Minute,
-				Storage:              nats.MemoryStorage,
-				DiscardNewPerSubject: true,
-				Discard:              nats.DiscardOld,
+				Retention:            loadTestSpecStream.GetRetentionPolicy(),
+				MaxAge:               loadTestSpecStream.GetMaxAge(),
+				Storage:              loadTestSpecStream.GetStorageType(),
+				DiscardNewPerSubject: loadTestSpecStream.GetDiscardNewPerSubject(),
+				Discard:              loadTestSpecStream.GetDiscardPolicy(),
+				MaxMsgs:              loadTestSpecStream.GetMaxMsgs(),
+				MaxBytes:             loadTestSpecStream.GetMaxBytes(),
+				MaxMsgsPerSubject:    loadTestSpecStream.GetMaxMsgsPerSubject(),
+				MaxConsumers:         loadTestSpecStream.GetMaxConsumers(),
 			}
 
 			stream, err := e.js.StreamInfo(streamName)
@@ -290,6 +301,7 @@ func (e *Engine) startConsumers(ctx context.Context, loadTestSpec *config.LoadTe
 func (e *Engine) startRampUp(ctx context.Context, loadTestSpec *config.LoadTestSpec) error {
 	rampUpDuration := loadTestSpec.RampUpDuration()
 
+	e.logger.Info("Starting ramp-up process", zap.Duration("duration", rampUpDuration))
 	if rampUpDuration == 0 {
 		e.logger.Info("No ramp-up configured, starting at full rate")
 		e.setAllPublishersToFullRate()
@@ -300,7 +312,6 @@ func (e *Engine) startRampUp(ctx context.Context, loadTestSpec *config.LoadTestS
 	rampUpStart := time.Now()
 	rampUpTimer := time.NewTimer(rampUpDuration)
 	rampUpTicker := time.NewTicker(time.Second)
-	e.logger.Info("Starting ramp-up", zap.Duration("duration", rampUpDuration))
 
 	targetRate := int32(0)
 	if len(e.publishers) > 0 {

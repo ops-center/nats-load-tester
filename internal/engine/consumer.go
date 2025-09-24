@@ -78,13 +78,21 @@ func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
 			ackPolicy = nats.AckAllPolicy
 		}
 
-		_, err = c.js.AddConsumer(c.config.StreamName, &nats.ConsumerConfig{
+		consumerConfig := &nats.ConsumerConfig{
 			Durable:       c.config.DurableName,
 			AckPolicy:     ackPolicy,
 			AckWait:       time.Duration(c.config.AckWaitSeconds) * time.Second,
 			MaxAckPending: c.config.MaxAckPending,
 			DeliverPolicy: nats.DeliverAllPolicy,
-		})
+		}
+
+		// For push consumers, we need to specify a DeliverSubject
+		if c.config.Type == "push" {
+			// Generate a unique delivery subject for this push consumer
+			consumerConfig.DeliverSubject = fmt.Sprintf("_INBOX.%s", c.config.DurableName)
+		}
+
+		_, err = c.js.AddConsumer(c.config.StreamName, consumerConfig)
 		if err != nil {
 			return fmt.Errorf("failed to create consumer: %w", err)
 		}

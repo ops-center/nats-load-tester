@@ -2,7 +2,7 @@
 - ~~fix the stream/publisher/consumer subjects synchronization and/or validation~~.
 - ~~implement 'GetFailures()' method for reading runtime failures.~~
 - ~~improve performance for file storage.~~
-- make streams more configurable (e.g. storage type, max msgs/bytes, retention policy, etc.).
+- ~~make streams more configurable (e.g. storage type, max msgs/bytes, retention policy, etc.).~~
 - support load testing nats clusters outside of k8s clusters, configured through args/envs.
 ------
 
@@ -37,7 +37,11 @@ curl -X POST http://localhost:9481/config \
             "replicas": 1,
             "subjects": ["orders.{}", "payments.{}"],
             "messages_per_stream_per_second": 100,
-            "message_size_bytes": 512
+            "retention": "limits",
+            "max_age": "5m",
+            "storage": "memory", 
+            "discard_new_per_subject": true,
+            "discard": "old"
           }
         ],
         "publishers": {
@@ -243,7 +247,7 @@ Individual load test configuration defining NATS connection, streams, publishers
 | `log_limits` | `LogLimits` | Logging constraints | Optional |
 
 ### StreamConfig
-JetStream stream configuration defining subjects, replication, and message throughput.
+JetStream stream configuration defining subjects, replication, message throughput, and NATS stream properties.
 
 ```json
 {
@@ -252,7 +256,15 @@ JetStream stream configuration defining subjects, replication, and message throu
   "replicas": 3,
   "subjects": ["orders.{}", "payments.{}"],
   "messages_per_stream_per_second": 1000,
-  "message_size_bytes": 1024
+  "retention": "limits",
+  "max_age": "5m",
+  "storage": "memory",
+  "discard_new_per_subject": true,
+  "discard": "old",
+  "max_msgs": 100000,
+  "max_bytes": 104857600,
+  "max_msgs_per_subject": 10000,
+  "max_consumers": 50
 }
 ```
 
@@ -263,7 +275,47 @@ JetStream stream configuration defining subjects, replication, and message throu
 | `replicas` | `int` | JetStream replica count per stream | Yes |
 | `subjects` | `[]string` | NATS subjects for the streams. Use `{}` placeholders for indexed subjects (automatically converted to `%d` format), or static subjects without placeholders. | Yes |
 | `messages_per_stream_per_second` | `int64` | Target message rate per stream | Yes |
-| `message_size_bytes` | `int64` | Size of each message in bytes | Yes |
+| `retention` | `string` | Stream retention policy: `"limits"`, `"interest"`, or `"workqueue"` | No (defaults to `"limits"`) |
+| `max_age` | `string` | Maximum age of messages (duration format, e.g., `"5m"`, `"2h30m"`, `"24h"`) | No (defaults to `"1m"`) |
+| `storage` | `string` | Storage type: `"file"` or `"memory"` | No (defaults to `"memory"`) |
+| `discard_new_per_subject` | `bool` | Whether to discard new messages per subject when limits are reached | No (defaults to `true`) |
+| `discard` | `string` | Discard policy when stream reaches limits: `"old"` or `"new"` | No (defaults to `"old"`) |
+| `max_msgs` | `int64` | Maximum number of messages in the stream (-1 for unlimited) | No (defaults to `-1` unlimited) |
+| `max_bytes` | `int64` | Maximum total size of messages in bytes (-1 for unlimited) | No (defaults to `-1` unlimited) |
+| `max_msgs_per_subject` | `int64` | Maximum messages per individual subject (-1 for unlimited) | No (defaults to `-1` unlimited) |
+| `max_consumers` | `int` | Maximum number of consumers allowed on this stream (-1 for unlimited) | No (defaults to `-1` unlimited) |
+
+#### Stream Configuration Options
+
+**Retention Policies:**
+- `"limits"` - Messages are retained until stream reaches configured limits (messages, bytes, age)
+- `"interest"` - Messages are removed once acknowledged by all consumers
+- `"workqueue"` - Messages are removed once consumed by any consumer (work queue pattern)
+
+**Storage Types:**
+- `"memory"` - Fast in-memory storage (lost on restart)
+- `"file"` - Persistent file-based storage (survives restarts)
+
+**Discard Policies:**
+- `"old"` - Remove oldest messages when limits are reached
+- `"new"` - Reject new messages when limits are reached
+
+**Duration Format:**
+The `max_age` field accepts Go duration format strings:
+- `"30s"` - 30 seconds  
+- `"5m"` - 5 minutes
+- `"2h30m"` - 2 hours and 30 minutes
+- `"24h"` - 24 hours
+- `"168h"` - 7 days (1 week)
+
+**Stream Limits:**
+Use the message and byte limits to control stream resource usage:
+- `max_msgs`: Total message count limit (useful for memory management)
+- `max_bytes`: Total storage size limit in bytes (e.g., `1048576` for 1MB)
+- `max_msgs_per_subject`: Per-subject message limit (useful with wildcard subjects)
+- `max_consumers`: Limit concurrent consumers (useful for resource control)
+
+Setting any limit to `-1` means unlimited (default behavior). When limits are reached, the `discard` policy determines whether to remove old messages or reject new ones.
 
 ### PublisherConfig
 Configuration for message publishers that write to JetStream.
