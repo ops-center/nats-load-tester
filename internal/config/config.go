@@ -3,9 +3,19 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+)
+
+// Validation constants
+const (
+	consumerTypePush     = "push"
+	consumerTypePull     = "pull"
+	storageTypeBadger    = "badger"
+	defaultStoragePath   = "./load_test_stats.db"
+	defaultStatsInterval = 5
 )
 
 type Config struct {
@@ -28,22 +38,32 @@ type LoadTestSpec struct {
 	LogLimits      LogLimits       `json:"log_limits"`
 }
 
+type PublishPattern string
+
+const (
+	PublishPatternSteady PublishPattern = "steady"
+	PublishPatternRandom PublishPattern = "random"
+)
+
 type StreamSpec struct {
 	NamePrefix                 string   `json:"name_prefix"`
 	Count                      int32    `json:"count"`
 	Replicas                   int32    `json:"replicas"`
 	Subjects                   []string `json:"subjects"`
 	MessagesPerStreamPerSecond int64    `json:"messages_per_stream_per_second"`
-	MessageSizeBytes           int64    `json:"message_size_bytes"`
-	PublishPattern             string   `json:"publish_pattern"`
+	// not implemented
+	MessageSizeBytes int64 `json:"message_size_bytes"`
 }
 
 type PublisherConfig struct {
-	CountPerStream       int32  `json:"count_per_stream"`
-	StreamNamePrefix     string `json:"stream_name_prefix"`
-	PublishRatePerSecond int32  `json:"publish_rate_per_second"`
-	MessageSizeBytes     int32  `json:"message_size_bytes"`
-	TrackLatency         bool   `json:"track_latency"`
+	CountPerStream       int32          `json:"count_per_stream"`
+	StreamNamePrefix     string         `json:"stream_name_prefix"`
+	PublishRatePerSecond int32          `json:"publish_rate_per_second"`
+	PublishPattern       PublishPattern `json:"publish_pattern"`
+	PublishBurstSize     int32          `json:"publish_burst_size"`
+	MessageSizeBytes     int32          `json:"message_size_bytes"`
+	// not implemented
+	TrackLatency bool `json:"track_latency"`
 }
 
 type ConsumerConfig struct {
@@ -115,160 +135,172 @@ func (c *Config) Validate() error {
 	}
 
 	if c.Storage.Type == "" {
-		c.Storage.Type = "badger"
+		c.Storage.Type = storageTypeBadger
 	}
 
 	if c.Storage.Path == "" {
-		c.Storage.Path = "./load_test_stats.db"
+		c.Storage.Path = defaultStoragePath
 	}
 
 	if c.StatsCollectionIntervalSeconds <= 0 {
-		c.StatsCollectionIntervalSeconds = 5
+		c.StatsCollectionIntervalSeconds = defaultStatsInterval
 	}
 
 	return nil
 }
 
 func (lts *LoadTestSpec) Validate() error {
+	loadTestValidationErrors := []error{}
 	if lts.Name == "" {
-		return fmt.Errorf("name required")
+		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("name required"))
 	}
 
 	if lts.NATSURL == "" {
-		return fmt.Errorf("nats_url required")
+		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("nats_url required"))
 	}
 
 	if lts.ClientIDPrefix == "" {
-		lts.ClientIDPrefix = "load-tester"
+		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("client_id_prefix required"))
 	}
 
 	if len(lts.Streams) == 0 {
-		return fmt.Errorf("at least one stream configuration required")
+		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("at least one stream required"))
 	}
 
 	for i, stream := range lts.Streams {
 		if err := stream.Validate(); err != nil {
-			return fmt.Errorf("stream %d: %w", i, err)
+			loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("stream %d: %w", i, err))
 		}
 	}
 
 	if err := lts.Publishers.Validate(); err != nil {
-		return fmt.Errorf("publishers: %w", err)
+		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("publishers: %w", err))
 	}
 
 	if err := lts.Consumers.Validate(); err != nil {
-		return fmt.Errorf("consumers: %w", err)
+		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("consumers: %w", err))
 	}
 
 	if err := lts.Behavior.Validate(); err != nil {
-		return fmt.Errorf("behavior: %w", err)
+		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("behavior: %w", err))
 	}
 
 	if err := lts.validateStreamSynchronization(); err != nil {
-		return fmt.Errorf("stream synchronization: %w", err)
+		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("stream synchronization: %w", err))
 	}
 
-	return nil
+	return errors.Join(loadTestValidationErrors...)
 }
 
 func (s *StreamSpec) Validate() error {
+	streamValidationErrors := []error{}
 	if s.NamePrefix == "" {
-		return fmt.Errorf("name_prefix required")
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("name_prefix required"))
 	}
 
 	if s.Count <= 0 {
-		return fmt.Errorf("count must be positive")
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("count must be positive, got %d", s.Count))
 	}
 
 	if s.Replicas <= 0 {
-		s.Replicas = 1
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("replicas must be positive, got %d", s.Replicas))
 	}
 
 	if len(s.Subjects) == 0 {
-		return fmt.Errorf("at least one subject required")
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("at least one subject required"))
+	}
+
+	if s.MessagesPerStreamPerSecond <= 0 {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("messages_per_stream_per_second must be positive, got %d", s.MessagesPerStreamPerSecond))
+	}
+
+	if s.MessageSizeBytes <= 0 {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("message_size_bytes must be positive, got %d", s.MessageSizeBytes))
+	}
+
+	if len(streamValidationErrors) > 0 {
+		return errors.Join(streamValidationErrors...)
 	}
 
 	for i := range s.Subjects {
 		s.Subjects[i] = strings.Replace(s.Subjects[i], "{}", "%d", 1)
 	}
 
-	if s.MessagesPerStreamPerSecond <= 0 {
-		s.MessagesPerStreamPerSecond = 100
-	}
-
-	if s.MessageSizeBytes <= 0 {
-		s.MessageSizeBytes = 256
-	}
-
-	if s.PublishPattern == "" {
-		s.PublishPattern = "steady"
-	}
-
 	return nil
 }
 
 func (p *PublisherConfig) Validate() error {
+	publishValidationErrors := []error{}
 	if p.CountPerStream <= 0 {
-		p.CountPerStream = 1
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("count_per_stream must be positive, got %d", p.CountPerStream))
 	}
 
 	if p.StreamNamePrefix == "" {
-		return fmt.Errorf("stream_name_prefix required")
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("stream_name_prefix required"))
 	}
 
 	if p.PublishRatePerSecond <= 0 {
-		p.PublishRatePerSecond = 100
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("publish_rate_per_second must be positive, got %d", p.PublishRatePerSecond))
 	}
 
 	if p.MessageSizeBytes <= 0 {
-		p.MessageSizeBytes = 1024
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("message_size_bytes must be positive, got %d", p.MessageSizeBytes))
+	}
+	if p.PublishBurstSize <= 0 {
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("publish_burst_size must be positive, got %d", p.PublishBurstSize))
 	}
 
-	return nil
+	if p.PublishPattern != PublishPatternSteady && p.PublishPattern != PublishPatternRandom {
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("unknown publish_pattern '%s'", p.PublishPattern))
+	}
+
+	return errors.Join(publishValidationErrors...)
 }
 
 func (c *ConsumerConfig) Validate() error {
+	consumerValidationErrors := []error{}
 	if c.StreamNamePrefix == "" {
-		return fmt.Errorf("stream_name_prefix required")
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("stream_name_prefix required"))
 	}
 
-	if c.Type != "push" && c.Type != "pull" {
-		c.Type = "push"
+	if c.Type != consumerTypePush && c.Type != consumerTypePull {
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("type must be '%s' or '%s', got '%s'", consumerTypePush, consumerTypePull, c.Type))
 	}
 
 	if c.CountPerStream <= 0 {
-		c.CountPerStream = 1
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("count_per_stream must be positive, got %d", c.CountPerStream))
 	}
 
 	if c.DurableNamePrefix == "" {
-		c.DurableNamePrefix = "load_consumer"
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("durable_name_prefix required"))
 	}
 
 	if c.AckWaitSeconds <= 0 {
-		c.AckWaitSeconds = 30
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("ack_wait_seconds must be positive, got %d", c.AckWaitSeconds))
 	}
 
 	if c.MaxAckPending <= 0 {
-		c.MaxAckPending = 1000
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("max_ack_pending must be positive, got %d", c.MaxAckPending))
 	}
 
 	if c.AckPolicy == "" {
-		c.AckPolicy = "explicit"
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("ack_policy required"))
 	}
 
-	return nil
+	return errors.Join(consumerValidationErrors...)
 }
 
 func (b *BehaviorConfig) Validate() error {
+	behaviorValidationErrors := []error{}
 	if b.DurationSeconds <= 0 {
-		b.DurationSeconds = 600
+		behaviorValidationErrors = append(behaviorValidationErrors, fmt.Errorf("duration_seconds must be positive, got %d", b.DurationSeconds))
 	}
 
 	if b.RampUpSeconds <= 0 {
-		b.RampUpSeconds = 1
+		behaviorValidationErrors = append(behaviorValidationErrors, fmt.Errorf("ramp_up_seconds must be positive, got %d", b.RampUpSeconds))
 	}
 
-	return nil
+	return errors.Join(behaviorValidationErrors...)
 }
 
 func (c *Config) Hash() string {
@@ -362,7 +394,7 @@ func containsFormatPlaceholder(subject string) bool {
 	return strings.Contains(subject, "%d")
 }
 
-// FormatSubject formats a subject template with the given stream index (1-based)
+// FormatSubject formats a subject template with the given stream index
 // If the subject has no format placeholder, returns the subject as-is
 func (s *StreamSpec) FormatSubject(subjectIndex, streamIndex int32) string {
 	if subjectIndex >= int32(len(s.Subjects)) {
@@ -375,16 +407,11 @@ func (s *StreamSpec) FormatSubject(subjectIndex, streamIndex int32) string {
 	return subject
 }
 
-// GetFormattedSubjects returns all subjects for a given stream index (1-based)
-// If a subject has no format placeholder, returns the subject as-is
+// GetFormattedSubjects returns all subjects for a given stream index
 func (s *StreamSpec) GetFormattedSubjects(streamIndex int32) []string {
 	subjects := make([]string, len(s.Subjects))
-	for i, subject := range s.Subjects {
-		if containsFormatPlaceholder(subject) {
-			subjects[i] = fmt.Sprintf(subject, streamIndex)
-		} else {
-			subjects[i] = subject
-		}
+	for i := range s.Subjects {
+		subjects[i] = s.FormatSubject(int32(i), streamIndex)
 	}
 	return subjects
 }

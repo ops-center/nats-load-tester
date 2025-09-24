@@ -15,14 +15,15 @@
             "test.subject.{}"
           ],
           "messages_per_stream_per_second": 1000,
-          "message_size_bytes": 256,
-          "publish_pattern": "steady"
+          "message_size_bytes": 256
         }
       ],
       "publishers": {
         "count_per_stream": 1,
         "stream_name_prefix": "load_stream",
         "publish_rate_per_second": 1000,
+        "publish_pattern": "steady",
+        "publish_burst_size": 1,
         "message_size_bytes": 1024,
         "track_latency": true
       },

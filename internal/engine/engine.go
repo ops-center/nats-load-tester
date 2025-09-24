@@ -196,14 +196,15 @@ func (e *Engine) startPublishers(ctx context.Context, loadTestSpec *config.LoadT
 
 			for j := int32(0); j < loadTestSpec.Publishers.CountPerStream; j++ {
 				pubCfg := PublisherConfig{
-					ID:             fmt.Sprintf("%s-pub-%d-%d", loadTestSpec.ClientIDPrefix, i+1, j+1),
-					StreamName:     streamName,
-					Subject:        loadTestSpecStream.FormatSubject(0, i+1),
-					MessageSize:    loadTestSpec.Publishers.MessageSizeBytes,
-					PublishRate:    loadTestSpec.Publishers.PublishRatePerSecond,
-					TrackLatency:   loadTestSpec.Publishers.TrackLatency,
-					PublishPattern: loadTestSpecStream.PublishPattern,
-					UseJetStream:   loadTestSpec.UseJetStream,
+					ID:               fmt.Sprintf("%s-pub-%d-%d", loadTestSpec.ClientIDPrefix, i+1, j+1),
+					StreamName:       streamName,
+					Subject:          loadTestSpecStream.FormatSubject(0, i+1),
+					MessageSize:      loadTestSpec.Publishers.MessageSizeBytes,
+					PublishRate:      loadTestSpec.Publishers.PublishRatePerSecond,
+					TrackLatency:     loadTestSpec.Publishers.TrackLatency,
+					PublishPattern:   loadTestSpec.Publishers.PublishPattern,
+					PublishBurstSize: loadTestSpec.Publishers.PublishBurstSize,
+					UseJetStream:     loadTestSpec.UseJetStream,
 				}
 
 				pub := NewPublisher(e.nc, e.js, pubCfg, e.statsCollector, e.logger)
@@ -288,7 +289,6 @@ func (e *Engine) startConsumers(ctx context.Context, loadTestSpec *config.LoadTe
 
 func (e *Engine) startRampUp(ctx context.Context, loadTestSpec *config.LoadTestSpec) error {
 	rampUpDuration := loadTestSpec.RampUpDuration()
-	rampUpStart := time.Now()
 
 	if rampUpDuration == 0 {
 		e.logger.Info("No ramp-up configured, starting at full rate")
@@ -297,6 +297,7 @@ func (e *Engine) startRampUp(ctx context.Context, loadTestSpec *config.LoadTestS
 		return nil
 	}
 
+	rampUpStart := time.Now()
 	rampUpTimer := time.NewTimer(rampUpDuration)
 	rampUpTicker := time.NewTicker(time.Second)
 	e.logger.Info("Starting ramp-up", zap.Duration("duration", rampUpDuration))

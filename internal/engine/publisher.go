@@ -9,18 +9,20 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"go.bytebuilders.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
 )
 
 type PublisherConfig struct {
-	ID             string
-	StreamName     string
-	Subject        string
-	MessageSize    int32
-	PublishRate    int32
-	TrackLatency   bool
-	PublishPattern string
-	UseJetStream   bool
+	ID               string
+	StreamName       string
+	Subject          string
+	MessageSize      int32
+	PublishRate      int32
+	TrackLatency     bool // TODO: track latency between publishes/acks
+	PublishPattern   config.PublishPattern
+	PublishBurstSize int32
+	UseJetStream     bool
 }
 
 type Publisher struct {
@@ -64,47 +66,26 @@ func NewPublisher(nc *nats.Conn, js nats.JetStreamContext, cfg PublisherConfig, 
 }
 
 func (p *Publisher) Start(ctx context.Context) error {
+	// Initial random delay to spread out publishers
+	time.Sleep(time.Duration(rand.Int63n(int64(100 * time.Millisecond))))
+
 	p.logger.Info("Starting publisher",
 		zap.String("id", p.config.ID),
 		zap.String("subject", p.config.Subject),
 		zap.Int32("rate", p.config.PublishRate),
 	)
+
+	// Start with a rate of 1/s, will be updated during ramp-up
 	p.currentRate.Store(1)
 
-	// Start with current rate, will be updated during ramp-up
-	interval := time.Second / time.Duration(p.GetCurrentRate())
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	var burstSize int32
-	if p.config.PublishPattern == "burst" {
-		burstSize = max(p.GetCurrentRate()/10, 1)
+	ticker := time.NewTicker(60 * time.Second)
+	if err := p.updateTicker(ticker, p.GetCurrentRate()); err != nil {
+		p.logger.Error("failed to set initial ticker", zap.Error(err))
 	}
-	randomDelay := time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(p.GetCurrentRate())
-	time.Sleep(randomDelay)
 
 	lastRate := p.GetCurrentRate()
 
 	for {
-		// Check if rate changed and update ticker if needed
-		currentRate := p.GetCurrentRate()
-
-		if currentRate != lastRate {
-			lastRate = currentRate
-			ticker.Stop()
-			interval = time.Second / time.Duration(currentRate)
-			ticker = time.NewTicker(interval)
-
-			if p.config.PublishPattern == "burst" {
-				burstSize = max(currentRate/10, 1)
-			}
-		}
-
-		if currentRate > 0 && p.config.PublishPattern == "random" {
-			ticker.Stop()
-			ticker = time.NewTicker(time.Duration(rand.Intn(2000)) * time.Millisecond / time.Duration(currentRate))
-		}
-
 		select {
 		case <-ctx.Done():
 			p.logger.Info("Publisher stopping", zap.String("id", p.config.ID))
@@ -112,28 +93,49 @@ func (p *Publisher) Start(ctx context.Context) error {
 
 		case <-ticker.C:
 			switch p.config.PublishPattern {
-			case "steady":
-				if err := p.publishMessage(); err != nil {
-					p.logger.Error("Failed to publish", zap.Error(err))
-					p.statsRecorder.RecordPublishError(err)
-				}
-			case "burst":
-				for i := int32(0); i < burstSize; i++ {
+			case config.PublishPatternSteady, config.PublishPatternRandom:
+				for range p.config.PublishBurstSize {
 					if err := p.publishMessage(); err != nil {
-						p.logger.Error("Failed to publish", zap.Error(err))
+						p.logger.Error("failed to publish", zap.Error(err))
 						p.statsRecorder.RecordPublishError(err)
 					}
 				}
-			case "random":
-				if err := p.publishMessage(); err != nil {
-					p.logger.Error("Failed to publish", zap.Error(err))
-					p.statsRecorder.RecordPublishError(err)
+				currentRate := p.GetCurrentRate()
+				if currentRate != lastRate {
+					lastRate = currentRate
+					if err := p.updateTicker(ticker, currentRate); err != nil {
+						p.logger.Error("failed to update ticker", zap.Error(err))
+					}
 				}
 			default:
 				return fmt.Errorf("unknown publish pattern: %s", p.config.PublishPattern)
 			}
 		}
+	}
+}
 
+func (p *Publisher) updateTicker(ticker *time.Ticker, currentRate int32) error {
+	interval, err := p.calculatePublishInterval(currentRate)
+	if err != nil {
+		return err
+	}
+	ticker.Reset(interval)
+	return nil
+}
+
+func (p *Publisher) calculatePublishInterval(currentRate int32) (time.Duration, error) {
+	if currentRate <= 0 {
+		return 0, fmt.Errorf("current rate is %d, cannot calculate interval", currentRate)
+	}
+
+	switch p.config.PublishPattern {
+	case config.PublishPatternSteady:
+		return time.Second / time.Duration(currentRate), nil
+	case config.PublishPatternRandom:
+		randomFactor := time.Duration(rand.Intn(1000)+500) * time.Millisecond
+		return randomFactor / time.Duration(currentRate), nil
+	default:
+		return 0, fmt.Errorf("unknown publish pattern: %s", p.config.PublishPattern)
 	}
 }
 
@@ -163,12 +165,8 @@ func (p *Publisher) publishMessage() error {
 
 // SetRate updates the current publishing rate
 func (p *Publisher) SetRate(rate int32) {
-	if rate < 1 {
-		rate = 1
-	}
-	if rate > p.targetRate {
-		rate = p.targetRate
-	}
+	rate = max(rate, 1)
+	rate = min(rate, p.targetRate)
 	p.currentRate.Store(int32(rate))
 	p.logger.Debug("Publisher rate updated",
 		zap.String("id", p.config.ID),

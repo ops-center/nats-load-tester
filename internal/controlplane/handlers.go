@@ -83,11 +83,31 @@ func (h *HTTPServer) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPServer) handleCheckHealth(w http.ResponseWriter, r *http.Request) {
+	health := map[string]interface{}{
+		"status":  "healthy",
+		"time":    time.Now().Format(time.RFC3339),
+		"service": "nats-load-tester",
+	}
+
+	// Check if configuration is loaded
+	cfg := h.getConfig()
+	if cfg != nil {
+		health["config_loaded"] = true
+		health["config_hash"] = cfg.Hash()
+	} else {
+		health["config_loaded"] = false
+	}
+
+	// Check if stats collector is available
+	collector := h.getCollector()
+	if collector != nil {
+		health["stats_collector"] = "available"
+	} else {
+		health["stats_collector"] = "not_available"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]string{
-		"status": "healthy",
-		"time":   time.Now().Format(time.RFC3339),
-	}); err != nil {
+	if err := json.NewEncoder(w).Encode(health); err != nil {
 		http.Error(w, "Error encoding health status", http.StatusInternalServerError)
 		h.logger.Error("failed to encode response", zap.Error(err))
 	}

@@ -37,14 +37,15 @@ curl -X POST http://localhost:9481/config \
             "replicas": 1,
             "subjects": ["orders.{}", "payments.{}"],
             "messages_per_stream_per_second": 100,
-            "message_size_bytes": 512,
-            "publish_pattern": "steady"
+            "message_size_bytes": 512
           }
         ],
         "publishers": {
           "count_per_stream": 1,
           "stream_name_prefix": "test_stream",
           "publish_rate_per_second": 100,
+          "publish_pattern": "steady",
+          "publish_burst_size": 1,
           "message_size_bytes": 512,
           "track_latency": true
         },
@@ -176,6 +177,8 @@ curl http://localhost:9481/health
 
 ## Configuration Schema
 
+> **⚠️ Strict Validation**: All configuration fields marked as "Required" must be provided with valid values. The system uses strict validation and will not apply defaults for missing fields. All numeric fields must be positive values where indicated.
+
 ### Root Configuration
 ```json
 {
@@ -249,20 +252,18 @@ JetStream stream configuration defining subjects, replication, and message throu
   "replicas": 3,
   "subjects": ["orders.{}", "payments.{}"],
   "messages_per_stream_per_second": 1000,
-  "message_size_bytes": 1024,
-  "publish_pattern": "steady"
+  "message_size_bytes": 1024
 }
 ```
 
-| Field | Type | Description | Default |
-|-------|------|-------------|---------|
-| `name_prefix` | `string` | Prefix for generated stream names | Required |
-| `count` | `int` | Number of streams to create | Required |
-| `replicas` | `int` | JetStream replica count per stream | `1` |
-| `subjects` | `[]string` | NATS subjects for the streams. Use `{}` placeholders for indexed subjects (automatically converted to `%d` format), or static subjects without placeholders. | Required |
-| `messages_per_stream_per_second` | `int64` | Target message rate per stream | `100` |
-| `message_size_bytes` | `int64` | Size of each message in bytes | `256` |
-| `publish_pattern` | `string` | Message publishing pattern ("steady", "burst", etc.) | `"steady"` |
+| Field | Type | Description | Required |
+|-------|------|-------------|----------|
+| `name_prefix` | `string` | Prefix for generated stream names | Yes |
+| `count` | `int` | Number of streams to create | Yes |
+| `replicas` | `int` | JetStream replica count per stream | Yes |
+| `subjects` | `[]string` | NATS subjects for the streams. Use `{}` placeholders for indexed subjects (automatically converted to `%d` format), or static subjects without placeholders. | Yes |
+| `messages_per_stream_per_second` | `int64` | Target message rate per stream | Yes |
+| `message_size_bytes` | `int64` | Size of each message in bytes | Yes |
 
 ### PublisherConfig
 Configuration for message publishers that write to JetStream.
@@ -272,18 +273,22 @@ Configuration for message publishers that write to JetStream.
   "count_per_stream": 2,
   "stream_name_prefix": "test-stream",
   "publish_rate_per_second": 500,
+  "publish_pattern": "steady",
+  "publish_burst_size": 1,
   "message_size_bytes": 1024,
   "track_latency": true
 }
 ```
 
-| Field | Type | Description | Default |
-|-------|------|-------------|---------|
-| `count_per_stream` | `int` | Number of publishers per stream | `1` |
-| `stream_name_prefix` | `string` | Prefix to match target streams | Required |
-| `publish_rate_per_second` | `int` | Messages per second per publisher | `100` |
-| `message_size_bytes` | `int` | Size of published messages | `1024` |
-| `track_latency` | `bool` | Enable end-to-end latency measurement | `false` |
+| Field | Type | Description | Required |
+|-------|------|-------------|----------|
+| `count_per_stream` | `int` | Number of publishers per stream | Yes |
+| `stream_name_prefix` | `string` | Prefix to match target streams | Yes |
+| `publish_rate_per_second` | `int` | Messages per second per publisher | Yes |
+| `publish_pattern` | `string` | Message publishing pattern: "steady" or "random" | Yes |
+| `publish_burst_size` | `int` | Number of messages to send in burst when using random pattern | Yes |
+| `message_size_bytes` | `int` | Size of published messages | Yes |
+| `track_latency` | `bool` | Enable end-to-end latency measurement | Yes |
 
 ### ConsumerConfig
 Configuration for message consumers that read from JetStream.
@@ -301,16 +306,16 @@ Configuration for message consumers that read from JetStream.
 }
 ```
 
-| Field | Type | Description | Default |
-|-------|------|-------------|---------|
-| `stream_name_prefix` | `string` | Prefix to match source streams | Required |
-| `type` | `string` | Consumer type: "push" or "pull" | `"push"` |
-| `count_per_stream` | `int` | Number of consumers per stream | `1` |
-| `durable_name_prefix` | `string` | Prefix for durable consumer names | `"load_consumer"` |
-| `ack_wait_seconds` | `int64` | Acknowledgment timeout in seconds | `30` |
-| `max_ack_pending` | `int` | Maximum unacknowledged messages | `1000` |
-| `consume_delay_ms` | `int64` | Artificial delay between message processing | `0` |
-| `ack_policy` | `string` | JetStream ack policy: "explicit", "none", "all" | `"explicit"` |
+| Field | Type | Description | Required |
+|-------|------|-------------|----------|
+| `stream_name_prefix` | `string` | Prefix to match source streams | Yes |
+| `type` | `string` | Consumer type: "push" or "pull" | Yes |
+| `count_per_stream` | `int` | Number of consumers per stream | Yes |
+| `durable_name_prefix` | `string` | Prefix for durable consumer names | Yes |
+| `ack_wait_seconds` | `int64` | Acknowledgment timeout in seconds | Yes |
+| `max_ack_pending` | `int` | Maximum unacknowledged messages | Yes |
+| `consume_delay_ms` | `int64` | Artificial delay between message processing | No |
+| `ack_policy` | `string` | JetStream ack policy: "explicit", "none", "all" | Yes |
 
 ### BehaviorConfig
 Test execution timing and behavior configuration.
@@ -322,10 +327,10 @@ Test execution timing and behavior configuration.
 }
 ```
 
-| Field | Type | Description | Default |
-|-------|------|-------------|---------|
-| `duration_seconds` | `int64` | Total test duration in seconds | `600` |
-| `ramp_up_seconds` | `int64` | Gradual ramp-up period for publishers/consumers | `1` |
+| Field | Type | Description | Required |
+|-------|------|-------------|----------|
+| `duration_seconds` | `int64` | Total test duration in seconds | Yes |
+| `ramp_up_seconds` | `int64` | Gradual ramp-up period for publishers/consumers | Yes |
 
 ### Storage
 Statistics storage backend configuration with multiple options for persistence and output.
