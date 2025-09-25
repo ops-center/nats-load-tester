@@ -69,4 +69,3 @@ spec:
         - name: nats-creds
           secret:
             secretName: ${NATS_CREDS_SECRET_NAME}
-            namespace: ${NATS_CREDS_SECRET_NAMESPACE}

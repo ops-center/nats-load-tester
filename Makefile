@@ -2,19 +2,18 @@
 DOCKER_REGISTRY ?= sami7786
 IMAGE_NAME ?= nats-load-tester
 VERSION ?= latest
-K8S_NAMESPACE ?= default
+K8S_NAMESPACE ?= ace
 NATS_SERVICE_NAME ?= ace-nats
 NATS_SERVICE_NAMESPACE ?= ace
 NATS_PORT ?= 4222
 NATS_CREDS_SECRET_NAME ?= ace-nats-cred
-NATS_CREDS_SECRET_NAMESPACE ?= ace
 NATS_CREDS_MOUNT_PATH ?= /etc/nats/creds
 
 # Full image name
 FULL_IMAGE_NAME = $(DOCKER_REGISTRY)/$(IMAGE_NAME):$(VERSION)
 
 # Dynamic NATS URL generation
-NATS_URL = nats://$(NATS_SERVICE_NAME).$(NATS_SERVICE_NAMESPACE).svc.cluster.local:$(NATS_PORT)
+NATS_URL = nats://$(NATS_SERVICE_NAME).$(K8S_NAMESPACE).svc.cluster.local:$(NATS_PORT)
 
 
 .PHONY: help
@@ -32,11 +31,9 @@ help:
 	@echo "  VERSION                = $(VERSION)"
 	@echo "  K8S_NAMESPACE          = $(K8S_NAMESPACE)"
 	@echo "  NATS_SERVICE_NAME      = $(NATS_SERVICE_NAME)"
-	@echo "  NATS_SERVICE_NAMESPACE = $(NATS_SERVICE_NAMESPACE)"
 	@echo "  NATS_PORT              = $(NATS_PORT)"
 	@echo "  NATS_URL               = $(NATS_URL)"
 	@echo "  NATS_CREDS_SECRET_NAME = $(NATS_CREDS_SECRET_NAME)"
-	@echo "  NATS_CREDS_SECRET_NAMESPACE = $(NATS_CREDS_SECRET_NAMESPACE)"
 	@echo "  NATS_CREDS_MOUNT_PATH  = $(NATS_CREDS_MOUNT_PATH)"
 
 # Build targets
@@ -69,7 +66,6 @@ deploy: push clean
 	sed -e "s|\$${DOCKER_REGISTRY}|$(DOCKER_REGISTRY)|g" \
 		-e "s|\$${VERSION}|$(VERSION)|g" \
 		-e "s|\$${NATS_CREDS_SECRET_NAME}|$(NATS_CREDS_SECRET_NAME)|g" \
-		-e "s|\$${NATS_CREDS_SECRET_NAMESPACE}|$(NATS_CREDS_SECRET_NAMESPACE)|g" \
 		-e "s|\$${NATS_CREDS_MOUNT_PATH}|$(NATS_CREDS_MOUNT_PATH)|g" \
 		k8s/deployment.yaml | kubectl apply -n $(K8S_NAMESPACE) -f -
 	kubectl apply -f k8s/service.yaml -n $(K8S_NAMESPACE)
