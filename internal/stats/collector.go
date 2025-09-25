@@ -164,11 +164,6 @@ func (c *Collector) RecordLatency(latency time.Duration) {
 	if len(c.latencies) > c.maxLatencySamples {
 		overflow := len(c.latencies) - c.maxLatencySamples
 		c.latencies = c.latencies[overflow:]
-
-		c.logger.Warn("Latency samples evicted due to size limit",
-			zap.Int("evicted", overflow),
-			zap.Int("max_samples", c.maxLatencySamples),
-		)
 	}
 }
 
