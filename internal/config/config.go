@@ -143,9 +143,9 @@ type BehaviorMultipliers struct {
 }
 
 type ConsumerMultipliers struct {
-	AckWaitMultiplier       float64 `json:"ack_wait_multiplier"`
-	MaxAckPendingMultiplier float64 `json:"max_ack_pending_multiplier"`
-	ConsumeDelayMultiplier  float64 `json:"consume_delay_multiplier"`
+	AckWaitMultiplier        float64 `json:"ack_wait_multiplier"`
+	MaxAckPendingMultiplier  float64 `json:"max_ack_pending_multiplier"`
+	ConsumeDelayMultiplier   float64 `json:"consume_delay_multiplier"`
 	CountPerStreamMultiplier float64 `json:"count_per_stream_multiplier"`
 }
 
@@ -169,6 +169,10 @@ func (c *Config) Validate() error {
 		if err := loadTestSpec.Validate(); err != nil {
 			return fmt.Errorf("configuration %d: %w", i, err)
 		}
+	}
+
+	if err := c.RepeatPolicy.Validate(); err != nil {
+		return fmt.Errorf("repeat_policy: %w", err)
 	}
 
 	if c.Storage.Type == "" {
@@ -407,6 +411,63 @@ func (lts *LoadTestSpec) Hash() string {
 	data, _ := json.Marshal(lts)
 	h := sha256.Sum256(data)
 	return fmt.Sprintf("%x", h)
+}
+
+// TODO: split and refactor these components into individual validation methods
+func (rp *RepeatPolicy) Validate() error {
+	if !rp.Enabled {
+		return nil
+	}
+
+	if rp.Streams.CountMultiplier <= 0 {
+		rp.Streams.CountMultiplier = 1.0
+	}
+
+	if rp.Streams.ReplicasMultiplier <= 0 {
+		rp.Streams.ReplicasMultiplier = 1.0
+	}
+
+	if rp.Streams.MessagesPerStreamPerSecondMultiplier <= 0 {
+		rp.Streams.MessagesPerStreamPerSecondMultiplier = 1.0
+	}
+
+	if rp.Behavior.DurationMultiplier <= 0 {
+		rp.Behavior.DurationMultiplier = 1.0
+	}
+
+	if rp.Behavior.RampUpMultiplier <= 0 {
+		rp.Behavior.RampUpMultiplier = 1.0
+	}
+
+	if rp.Consumers.AckWaitMultiplier <= 0 {
+		rp.Consumers.AckWaitMultiplier = 1.0
+	}
+
+	if rp.Consumers.MaxAckPendingMultiplier <= 0 {
+		rp.Consumers.MaxAckPendingMultiplier = 1.0
+	}
+
+	if rp.Consumers.ConsumeDelayMultiplier <= 0 {
+		rp.Consumers.ConsumeDelayMultiplier = 1.0
+	}
+
+	if rp.Consumers.CountPerStreamMultiplier <= 0 {
+		rp.Consumers.CountPerStreamMultiplier = 1.0
+	}
+
+	if rp.Publishers.CountPerStreamMultiplier <= 0 {
+		rp.Publishers.CountPerStreamMultiplier = 1.0
+	}
+
+	if rp.Publishers.PublishRateMultiplier <= 0 {
+		rp.Publishers.PublishRateMultiplier = 1.0
+	}
+
+	if rp.Publishers.MessageSizeBytesMultiplier <= 0 {
+		rp.Publishers.MessageSizeBytesMultiplier = 1.0
+	}
+
+	return nil
 }
 
 func (lts *LoadTestSpec) ApplyMultipliers(rp RepeatPolicy) {

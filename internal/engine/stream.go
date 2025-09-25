@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -52,32 +53,23 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 				MaxConsumers:         streamSpec.GetMaxConsumers(),
 			}
 
-			var stream *nats.StreamInfo
-			var err error
 			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5, func() error {
-				stream, err = sm.js.StreamInfo(streamName)
-				if err != nil && err != nats.ErrStreamNotFound {
-					return fmt.Errorf("failed to get stream info: %w", err)
+				err := sm.js.DeleteStream(streamName)
+				if err != nil && !errors.Is(err, nats.ErrStreamNotFound) {
+					return fmt.Errorf("failed to delete stream %s: %w", streamName, err)
 				}
+				sm.logger.Info("Deleted stream", zap.String("name", streamName))
 				return nil
 			}); err != nil {
 				return err
 			}
 
-			if err = exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5, func() error {
-				if stream == nil {
-					_, err = sm.js.AddStream(streamConfig)
-					if err != nil {
-						return fmt.Errorf("failed to create stream %s: %w", streamName, err)
-					}
-					sm.logger.Info("Created stream", zap.String("name", streamName))
-				} else {
-					_, err = sm.js.UpdateStream(streamConfig)
-					if err != nil {
-						return fmt.Errorf("failed to update stream %s: %w", streamName, err)
-					}
-					sm.logger.Info("Updated stream", zap.String("name", streamName))
+			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5, func() error {
+				_, err := sm.js.AddStream(streamConfig)
+				if err != nil {
+					return fmt.Errorf("failed to create stream %s: %w", streamName, err)
 				}
+				sm.logger.Info("Created stream", zap.String("name", streamName))
 				return nil
 			}); err != nil {
 				return err

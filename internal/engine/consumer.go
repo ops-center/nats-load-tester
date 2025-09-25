@@ -255,6 +255,10 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js nats.JetStreamContex
 								zap.Error(err))
 							return fmt.Errorf("consumer %s failed: %w", consumer.GetID(), err)
 						}
+						logger.Info("consumer started",
+							zap.String("id", consumer.GetID()),
+							zap.String("stream", consumer.GetStreamName()),
+							zap.String("subject", consumer.GetSubject()))
 						eg.Go(func() error {
 							<-ctx.Done()
 							if consumerErr := consumer.Cleanup(); consumerErr != nil {

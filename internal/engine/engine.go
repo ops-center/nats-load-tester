@@ -160,9 +160,6 @@ func (e *Engine) cleanup() {
 	if e.cancel != nil {
 		e.cancel()
 	}
-	if e.nc != nil && e.nc.IsConnected() {
-		e.nc.Close()
-	}
 
 	// Clean up consumers
 	for _, consumer := range e.consumers {
@@ -180,6 +177,10 @@ func (e *Engine) cleanup() {
 		if err := e.streamManager.CleanupStreams(e.loadTestSpec); err != nil {
 			e.logger.Error("Stream cleanup failed", zap.Error(err))
 		}
+	}
+
+	if e.nc != nil && e.nc.IsConnected() {
+		e.nc.Close()
 	}
 
 	e.publishers = e.publishers[:0]
