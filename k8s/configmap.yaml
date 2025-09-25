@@ -19,7 +19,7 @@ data:
           "streams": [
             {
               "name_prefix": "load_stream",
-              "count": 3,
+              "count": 5,
               "replicas": 1,
               "subjects": [
                 "test.subject.{}"
@@ -37,7 +37,7 @@ data:
             }
           ],
           "publishers": {
-            "count_per_stream": 1,
+            "count_per_stream": 50,
             "stream_name_prefix": "load_stream",
             "publish_rate_per_second": 1000,
             "publish_pattern": "steady",
@@ -48,7 +48,7 @@ data:
           "consumers": {
             "stream_name_prefix": "load_stream",
             "type": "push",
-            "count_per_stream": 1,
+            "count_per_stream": 40,
             "durable_name_prefix": "load_consumer",
             "ack_wait_seconds": 30,
             "max_ack_pending": 1000,
@@ -56,7 +56,7 @@ data:
             "ack_policy": "explicit"
           },
           "behavior": {
-            "duration_seconds": 600,
+            "duration_seconds": 30,
             "ramp_up_seconds": 30
           },
           "log_limits": {
@@ -73,17 +73,17 @@ data:
           "messages_per_stream_per_second_multiplier": 1.5
         },
         "behavior": {
-          "duration_multiplier": 1.2,
-          "ramp_up_multiplier": 1.2
+          "duration_multiplier": 1.0,
+          "ramp_up_multiplier": 1.0
         },
         "consumers": {
           "ack_wait_multiplier": 1.5,
           "max_ack_pending_multiplier": 1.5,
-          "consume_delay_multiplier": 1
+          "consume_delay_multiplier": 1.1
         },
         "publishers": {
-          "count_per_stream_multiplier": 1,
-          "publish_rate_multiplier": 1,
+          "count_per_stream_multiplier": 1.5,
+          "publish_rate_multiplier": 1.5,
           "message_size_bytes_multiplier": 1
         }
       },

@@ -139,6 +139,7 @@ curl http://localhost:9481/healthcheck
       "ack_wait_multiplier": 1.5,
       "max_ack_pending_multiplier": 1.5,
       "consume_delay_multiplier": 1
+      "count_per_stream_multiplier": 1
     },
     "publishers": {
       "count_per_stream_multiplier": 1,

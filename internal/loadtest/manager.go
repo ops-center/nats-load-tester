@@ -2,6 +2,7 @@ package loadtest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -181,10 +182,20 @@ func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 			default:
 			}
 
+			m.logger.Info("======================================\n")
+			lastLoadTest.ApplyMultipliers(cfg.RepeatPolicy)
+
 			m.logger.Info("Starting repeat configuration",
 				zap.Int("iteration", repeatCount),
 				zap.String("name", lastLoadTest.Name),
 			)
+
+			currentConfig, err := json.MarshalIndent(lastLoadTest, "", "  ")
+			if err != nil {
+				m.logger.Error("failed to marshal current config", zap.Error(err))
+			} else {
+				m.logger.Info("Current config: " + string(currentConfig))
+			}
 
 			done, err := processLoadTestSpec(lastLoadTest, "Repeat")
 			if done {

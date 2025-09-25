@@ -146,6 +146,7 @@ type ConsumerMultipliers struct {
 	AckWaitMultiplier       float64 `json:"ack_wait_multiplier"`
 	MaxAckPendingMultiplier float64 `json:"max_ack_pending_multiplier"`
 	ConsumeDelayMultiplier  float64 `json:"consume_delay_multiplier"`
+	CountPerStreamMultiplier float64 `json:"count_per_stream_multiplier"`
 }
 
 type PublisherMultipliers struct {
@@ -421,6 +422,7 @@ func (lts *LoadTestSpec) ApplyMultipliers(rp RepeatPolicy) {
 	lts.Consumers.AckWaitSeconds = int64(float64(lts.Consumers.AckWaitSeconds) * rp.Consumers.AckWaitMultiplier)
 	lts.Consumers.MaxAckPending = int32(float64(lts.Consumers.MaxAckPending) * rp.Consumers.MaxAckPendingMultiplier)
 	lts.Consumers.ConsumeDelayMs = int64(float64(lts.Consumers.ConsumeDelayMs) * rp.Consumers.ConsumeDelayMultiplier)
+	lts.Consumers.CountPerStream = int32(float64(lts.Consumers.CountPerStream) * rp.Consumers.CountPerStreamMultiplier)
 
 	lts.Publishers.CountPerStream = int32(float64(lts.Publishers.CountPerStream) * rp.Publishers.CountPerStreamMultiplier)
 	lts.Publishers.PublishRatePerSecond = int32(float64(lts.Publishers.PublishRatePerSecond) * rp.Publishers.PublishRateMultiplier)
