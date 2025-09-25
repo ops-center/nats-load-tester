@@ -214,7 +214,6 @@ func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 			)
 
 			repeatCount++
-			time.Sleep(5 * time.Second)
 		}
 	}
 
