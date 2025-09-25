@@ -49,7 +49,7 @@ func (h *HTTPServer) Start(ctx context.Context) error {
 	r.Post("/config", h.handleConfigUpdate)
 	r.Get("/config", h.handleConfigGet)
 	r.Get("/healthcheck", h.handleCheckHealth)
-	r.Get("/stats/history", h.handleGetStatsHistory)
+	r.Get("/stats", h.handleGetStatsHistory)
 
 	h.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", h.port),

@@ -76,7 +76,7 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 }
 
 // CleanupStreams removes streams created during the test
-func (sm *StreamManager) CleanupStreams(ctx context.Context, loadTestSpec *config.LoadTestSpec) error {
+func (sm *StreamManager) CleanupStreams(loadTestSpec *config.LoadTestSpec) error {
 	for _, loadTestSpecStream := range loadTestSpec.Streams {
 		streamNames := loadTestSpecStream.GetFormattedStreamNames()
 		for _, streamName := range streamNames {

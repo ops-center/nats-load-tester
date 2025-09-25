@@ -60,7 +60,7 @@ curl http://localhost:9481/config
 
 **Retrieve statistics (optional limit parameter):**
 ```bash
-curl http://localhost:9481/stats/history?limit=10
+curl http://localhost:9481/stats?limit=10
 ```
 
 **Health check:**

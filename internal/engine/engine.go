@@ -177,7 +177,7 @@ func (e *Engine) cleanup() {
 
 	// Clean up streams if JetStream is enabled
 	if e.loadTestSpec != nil && e.loadTestSpec.UseJetStream && e.streamManager != nil {
-		if err := e.streamManager.CleanupStreams(context.Background(), e.loadTestSpec); err != nil {
+		if err := e.streamManager.CleanupStreams(e.loadTestSpec); err != nil {
 			e.logger.Error("Stream cleanup failed", zap.Error(err))
 		}
 	}
