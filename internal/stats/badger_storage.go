@@ -19,24 +19,13 @@ const (
 )
 
 type BadgerStorage struct {
-	mu     sync.RWMutex
-	db     *badger.DB
-	logger *zap.Logger
+	mu       sync.RWMutex
+	db       *badger.DB
+	logger   *zap.Logger
+	gcCancel chan struct{}
 }
 
-var (
-	badgerInstances = make(map[string]*BadgerStorage)
-	badgerMutex     sync.RWMutex
-)
-
 func NewBadgerStorage(path string, logger *zap.Logger) (*BadgerStorage, error) {
-	badgerMutex.Lock()
-	defer badgerMutex.Unlock()
-
-	if existing, exists := badgerInstances[path]; exists {
-		return existing, nil
-	}
-
 	var db *badger.DB
 	var err error
 	opts := badger.DefaultOptions(path).WithBypassLockGuard(false)
@@ -54,22 +43,26 @@ func NewBadgerStorage(path string, logger *zap.Logger) (*BadgerStorage, error) {
 	}
 
 	storage := &BadgerStorage{
-		db:     db,
-		logger: logger,
+		db:       db,
+		logger:   logger,
+		gcCancel: make(chan struct{}),
 	}
-
-	badgerInstances[path] = storage
 
 	go func() {
 		// TODO: make this configurable and/or smarter
 		// https://docs.hypermode.com/badger/quickstart#garbage-collection
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-		again:
-			err := storage.db.RunValueLogGC(0.5)
-			if err == nil {
-				goto again
+		for {
+			select {
+			case <-ticker.C:
+			again:
+				err := storage.db.RunValueLogGC(0.5)
+				if err == nil {
+					goto again
+				}
+			case <-storage.gcCancel:
+				return
 			}
 		}
 	}()
@@ -119,14 +112,9 @@ func (b *BadgerStorage) Close() error {
 		b.logger.Info("closing badger storage")
 	}
 
-	badgerMutex.Lock()
-	for path, instance := range badgerInstances {
-		if instance == b {
-			delete(badgerInstances, path)
-			break
-		}
+	if b.gcCancel != nil {
+		close(b.gcCancel)
 	}
-	badgerMutex.Unlock()
 
 	return b.db.Close()
 }

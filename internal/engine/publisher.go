@@ -208,15 +208,15 @@ func (p *Publisher) GetSubject() string {
 func CreatePublishers(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) []PublisherInterface {
 	publishers := make([]PublisherInterface, 0)
 
-	for _, loadTestSpecStream := range loadTestSpec.Streams {
+	for _, streamSpec := range loadTestSpec.Streams {
 		// Only create publishers for streams that match the publisher's stream name prefix
-		if loadTestSpecStream.NamePrefix != loadTestSpec.Publishers.StreamNamePrefix {
+		if streamSpec.NamePrefix != loadTestSpec.Publishers.StreamNamePrefix {
 			continue
 		}
 
-		streamNames := loadTestSpecStream.GetFormattedStreamNames()
+		streamNames := streamSpec.GetFormattedStreamNames()
 		for streamIndex, streamName := range streamNames {
-			subjects := loadTestSpecStream.GetFormattedSubjects(int32(streamIndex + 1))
+			subjects := streamSpec.GetFormattedSubjects(int32(streamIndex + 1))
 
 			for subjectIndex, subject := range subjects {
 				for j := int32(0); j < loadTestSpec.Publishers.CountPerStream; j++ {

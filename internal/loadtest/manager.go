@@ -106,6 +106,8 @@ func (m *Manager) run(ctx context.Context) {
 				defer m.mutex.Unlock()
 
 				defer func() {
+					m.httpServer.SetCollector(nil)
+					m.httpServer.SetConfig(nil)
 					if engine != nil {
 						if err := engine.Stop(); err != nil {
 							m.logger.Error("engine wait failed", zap.Error(err))

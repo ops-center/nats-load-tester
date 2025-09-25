@@ -164,8 +164,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("at least one configuration required")
 	}
 
-	for i, cfg := range c.LoadTestSpecs {
-		if err := cfg.Validate(); err != nil {
+	for i, loadTestSpec := range c.LoadTestSpecs {
+		if err := loadTestSpec.Validate(); err != nil {
 			return fmt.Errorf("configuration %d: %w", i, err)
 		}
 	}

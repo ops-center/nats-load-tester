@@ -30,25 +30,25 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 		return fmt.Errorf("context is nil")
 	}
 
-	for _, loadTestSpecStream := range loadTestSpec.Streams {
-		streamNames := loadTestSpecStream.GetFormattedStreamNames()
+	for _, streamSpec := range loadTestSpec.Streams {
+		streamNames := streamSpec.GetFormattedStreamNames()
 		for streamIndex, streamName := range streamNames {
-			subjects := loadTestSpecStream.GetFormattedSubjects(int32(streamIndex + 1))
+			subjects := streamSpec.GetFormattedSubjects(int32(streamIndex + 1))
 
 			streamConfig := &nats.StreamConfig{
 				Name:     streamName,
 				Subjects: subjects,
-				Replicas: int(loadTestSpecStream.Replicas),
+				Replicas: int(streamSpec.Replicas),
 
-				Retention:            loadTestSpecStream.GetRetentionPolicy(),
-				MaxAge:               loadTestSpecStream.GetMaxAge(),
-				Storage:              loadTestSpecStream.GetStorageType(),
-				DiscardNewPerSubject: loadTestSpecStream.GetDiscardNewPerSubject(),
-				Discard:              loadTestSpecStream.GetDiscardPolicy(),
-				MaxMsgs:              loadTestSpecStream.GetMaxMsgs(),
-				MaxBytes:             loadTestSpecStream.GetMaxBytes(),
-				MaxMsgsPerSubject:    loadTestSpecStream.GetMaxMsgsPerSubject(),
-				MaxConsumers:         loadTestSpecStream.GetMaxConsumers(),
+				Retention:            streamSpec.GetRetentionPolicy(),
+				MaxAge:               streamSpec.GetMaxAge(),
+				Storage:              streamSpec.GetStorageType(),
+				DiscardNewPerSubject: streamSpec.GetDiscardNewPerSubject(),
+				Discard:              streamSpec.GetDiscardPolicy(),
+				MaxMsgs:              streamSpec.GetMaxMsgs(),
+				MaxBytes:             streamSpec.GetMaxBytes(),
+				MaxMsgsPerSubject:    streamSpec.GetMaxMsgsPerSubject(),
+				MaxConsumers:         streamSpec.GetMaxConsumers(),
 			}
 
 			stream, err := sm.js.StreamInfo(streamName)
@@ -77,8 +77,8 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 
 // CleanupStreams removes streams created during the test
 func (sm *StreamManager) CleanupStreams(loadTestSpec *config.LoadTestSpec) error {
-	for _, loadTestSpecStream := range loadTestSpec.Streams {
-		streamNames := loadTestSpecStream.GetFormattedStreamNames()
+	for _, streamSpec := range loadTestSpec.Streams {
+		streamNames := streamSpec.GetFormattedStreamNames()
 		for _, streamName := range streamNames {
 
 			err := sm.js.DeleteStream(streamName)
