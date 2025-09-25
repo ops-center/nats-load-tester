@@ -7,13 +7,13 @@ metadata:
     app: nats-load-tester
     component: load-tester
 data:
-  config.json: |-
+  config.default.json: |-
     {
       "load_test_specs": [
         {
           "name": "100-streams-3-replicas-immediate",
           "nats_url": "${NATS_URL}",
-          "nats_creds_file": "",
+          "nats_creds_file": "/etc/nats/creds/admin.creds",
           "use_jetstream": true,
           "client_id_prefix": "load-tester",
           "streams": [
@@ -88,8 +88,8 @@ data:
         }
       },
       "storage": {
-        "type": "file",
-        "path": "./load_test_stats.log"
+        "type": "badger",
+        "path": "/var/lib/lt/load_test_stats.db"
       },
       "stats_collection_interval_seconds": 5
     }

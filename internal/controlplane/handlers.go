@@ -83,7 +83,7 @@ func (h *HTTPServer) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPServer) handleCheckHealth(w http.ResponseWriter, r *http.Request) {
-	health := map[string]interface{}{
+	health := map[string]any{
 		"status":  "healthy",
 		"time":    time.Now().Format(time.RFC3339),
 		"service": "nats-load-tester",

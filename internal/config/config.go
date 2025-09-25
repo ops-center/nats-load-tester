@@ -38,7 +38,7 @@ type Config struct {
 type LoadTestSpec struct {
 	Name           string          `json:"name"`
 	NATSURL        string          `json:"nats_url"`
-	NATSCredsFile  string          `json:"nats_creds_file,omitempty"`
+	NATSCredsFile  string          `json:"nats_creds_file"`
 	UseJetStream   bool            `json:"use_jetstream"`
 	ClientIDPrefix string          `json:"client_id_prefix"`
 	Streams        []StreamSpec    `json:"streams"`
@@ -81,11 +81,11 @@ type StreamSpec struct {
 	MessagesPerStreamPerSecond int64    `json:"messages_per_stream_per_second"`
 
 	// Stream configuration options (optional with defaults)
-	Retention            string `json:"retention,omitempty"`               // "limits", "interest", "workqueue" - defaults to "limits"
-	MaxAge               string `json:"max_age,omitempty"`                 // duration string like "1h", "30m" - defaults to "1m"
-	Storage              string `json:"storage,omitempty"`                 // "file", "memory" - defaults to "memory"
+	Retention            string `json:"retention"`                         // "limits", "interest", "workqueue" - defaults to "limits"
+	MaxAge               string `json:"max_age"`                           // duration string like "1h", "30m" - defaults to "1m"
+	Storage              string `json:"storage"`                           // "file", "memory" - defaults to "memory"
 	DiscardNewPerSubject *bool  `json:"discard_new_per_subject,omitempty"` // defaults to false
-	Discard              string `json:"discard,omitempty"`                 // "old", "new" - defaults to "old"
+	Discard              string `json:"discard"`                           // "old", "new" - defaults to "old"
 	MaxMsgs              *int64 `json:"max_msgs,omitempty"`                // maximum number of messages - defaults to -1 (unlimited)
 	MaxBytes             *int64 `json:"max_bytes,omitempty"`               // maximum total size of messages - defaults to -1 (unlimited)
 	MaxMsgsPerSubject    *int64 `json:"max_msgs_per_subject,omitempty"`    // maximum messages per subject - defaults to -1 (unlimited)

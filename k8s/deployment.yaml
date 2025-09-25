@@ -43,10 +43,7 @@ spec:
           mountPath: /var/lib/lt
         args:
         - "--use-default-config=true"
-        - "--config-file-path"
-        - "/config/config.default.json"
-        - "--port"
-        - "9481"
+        - "--port=9481"
         readinessProbe:
           httpGet:
             path: /healthcheck
