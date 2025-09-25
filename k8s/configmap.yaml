@@ -19,7 +19,7 @@ data:
           "streams": [
             {
               "name_prefix": "load_stream",
-              "count": 100,
+              "count": 3,
               "replicas": 1,
               "subjects": [
                 "test.subject.{}"
