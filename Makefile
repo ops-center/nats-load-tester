@@ -6,6 +6,9 @@ K8S_NAMESPACE ?= default
 NATS_SERVICE_NAME ?= ace-nats
 NATS_SERVICE_NAMESPACE ?= ace
 NATS_PORT ?= 4222
+NATS_CREDS_SECRET_NAME ?= ace-nats-cred
+NATS_CREDS_SECRET_NAMESPACE ?= ace
+NATS_CREDS_MOUNT_PATH ?= /etc/nats/creds
 
 # Full image name
 FULL_IMAGE_NAME = $(DOCKER_REGISTRY)/$(IMAGE_NAME):$(VERSION)
@@ -32,6 +35,9 @@ help:
 	@echo "  NATS_SERVICE_NAMESPACE = $(NATS_SERVICE_NAMESPACE)"
 	@echo "  NATS_PORT              = $(NATS_PORT)"
 	@echo "  NATS_URL               = $(NATS_URL)"
+	@echo "  NATS_CREDS_SECRET_NAME = $(NATS_CREDS_SECRET_NAME)"
+	@echo "  NATS_CREDS_SECRET_NAMESPACE = $(NATS_CREDS_SECRET_NAMESPACE)"
+	@echo "  NATS_CREDS_MOUNT_PATH  = $(NATS_CREDS_MOUNT_PATH)"
 
 # Build targets
 .PHONY: build
@@ -55,12 +61,16 @@ clean:
 deploy: push clean
 	@echo "Deploying to Kubernetes..."
 	@echo "Using NATS URL: $(NATS_URL)"
-	# Apply configmap with dynamic NATS URL
+	# Apply configmap with dynamic NATS URL and creds path
 	sed -e "s|\$${NATS_URL}|$(NATS_URL)|g" \
+		-e "s|\$${NATS_CREDS_MOUNT_PATH}|$(NATS_CREDS_MOUNT_PATH)|g" \
 		k8s/configmap.yaml | kubectl apply -n $(K8S_NAMESPACE) -f -
 	# Apply Kubernetes manifests with substituted values
 	sed -e "s|\$${DOCKER_REGISTRY}|$(DOCKER_REGISTRY)|g" \
 		-e "s|\$${VERSION}|$(VERSION)|g" \
+		-e "s|\$${NATS_CREDS_SECRET_NAME}|$(NATS_CREDS_SECRET_NAME)|g" \
+		-e "s|\$${NATS_CREDS_SECRET_NAMESPACE}|$(NATS_CREDS_SECRET_NAMESPACE)|g" \
+		-e "s|\$${NATS_CREDS_MOUNT_PATH}|$(NATS_CREDS_MOUNT_PATH)|g" \
 		k8s/deployment.yaml | kubectl apply -n $(K8S_NAMESPACE) -f -
 	kubectl apply -f k8s/service.yaml -n $(K8S_NAMESPACE)
 
@@ -79,4 +89,6 @@ config:
 	@echo "  NATS_URL: $(NATS_URL)"
 	@echo ""
 	@echo "Generated configmap preview:"
-	@sed -e "s|\$${NATS_URL}|$(NATS_URL)|g" k8s/configmap.yaml | head -20
+	@sed -e "s|\$${NATS_URL}|$(NATS_URL)|g" \
+		-e "s|\$${NATS_CREDS_MOUNT_PATH}|$(NATS_CREDS_MOUNT_PATH)|g" \
+		k8s/configmap.yaml | head -20

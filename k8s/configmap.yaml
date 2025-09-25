@@ -13,7 +13,7 @@ data:
         {
           "name": "100-streams-3-replicas-immediate",
           "nats_url": "${NATS_URL}",
-          "nats_creds_file": "/etc/nats/creds/admin.creds",
+          "nats_creds_file": "${NATS_CREDS_MOUNT_PATH}/admin.creds",
           "use_jetstream": true,
           "client_id_prefix": "load-tester",
           "streams": [

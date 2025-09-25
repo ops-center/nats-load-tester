@@ -41,6 +41,9 @@ spec:
           readOnly: true
         - name: data
           mountPath: /var/lib/lt
+        - name: nats-creds
+          mountPath: ${NATS_CREDS_MOUNT_PATH}
+          readOnly: true
         args:
         - "--use-default-config=true"
         - "--port=9481"
@@ -57,9 +60,13 @@ spec:
           initialDelaySeconds: 15
           periodSeconds: 20
       volumes:
-      - name: config
-        configMap:
-          name: nats-load-tester-config
-          optional: true
-      - name: data
-        emptyDir: {}
+        - name: config
+          configMap:
+            name: nats-load-tester-config
+            optional: true
+        - name: data
+          emptyDir: {}
+        - name: nats-creds
+          secret:
+            secretName: ${NATS_CREDS_SECRET_NAME}
+            namespace: ${NATS_CREDS_SECRET_NAMESPACE}
