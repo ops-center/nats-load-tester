@@ -1,6 +1,6 @@
 # NATS Load Tester
 
-Distributed NATS JetStream load testing tool for Kubernetes clusters. Each pod runs independently with HTTP API for configuration and monitoring.
+NATS JetStream load testing tool for Kubernetes clusters.
 
 ## Kubernetes Deployment
 
@@ -12,28 +12,17 @@ make deploy
 
 ## Deployment Customization
 
-### Kubernetes Resources
-Modify `k8s/deployment.yaml` to customize:
-- **Replicas**: Scale pod count (`spec.replicas`)
-- **CPU/Memory**: Adjust resource requests/limits (`spec.containers.resources`)
-
 ### Default Configuration
 Modify `k8s/configmap.yaml` to set the default load test specifications that pods load on startup.
 
-### Service Limitations
-**Current**: The service routes traffic to a random pod - you cannot target specific pods for configuration.
-**Planned**: Unified service endpoint will coordinate configuration across all pods.
-
 ## API Endpoints
 
-Submit load test configuration (hits random pod):
 ```bash
 curl -X POST http://service-endpoint:9481/config \
   -H "Content-Type: application/json" \
   -d @config.default.json
 ```
 
-Get stats from random pod:
 ```bash
 curl http://service-endpoint:9481/stats?limit=10
 ```
@@ -44,7 +33,6 @@ curl http://service-endpoint:9481/stats?limit=10
 
 | Pattern | Replacement | Description |
 |---------|-------------|-------------|
-| `{pod}` | `POD_NAME` env var | Pod name injection for multi-pod deployments |
 | `{}` | Stream number | Dynamic subject generation per stream |
 
 > **Note**: Full `${VAR}` environment variable expansion is not yet supported.
@@ -82,8 +70,8 @@ curl http://service-endpoint:9481/stats?limit=10
 | `name_prefix` | `string` | ✓ | - | Stream name prefix (indexed: stream_1, stream_2...) |
 | `count` | `int32` | ✓ | - | Number of streams to create |
 | `replicas` | `int32` | ✓ | - | JetStream replication factor |
-| `subjects` | `[]string` | ✓ | - | NATS subjects (`{}` = stream index placeholder, `{pod}` = pod name) |
-| `messages_per_stream_per_second` | `int64` | ✓ | - | Target message throughput per stream |
+| `subjects` | `[]string` | ✓ | - | NATS subjects (`{}` = stream index placeholder) |
+|`messages_per_stream_per_second` | `int64` | ✓ | - | Target message throughput per stream |
 | `retention` | `string` | - | `"limits"` | Retention: `limits`, `interest`, `workqueue` |
 | `max_age` | `string` | - | `"1m"` | Message TTL (e.g., `5m`, `2h30m`, `24h`) |
 | `storage` | `string` | - | `"memory"` | Storage: `memory`, `file` |
@@ -148,33 +136,33 @@ curl http://service-endpoint:9481/stats?limit=10
 ```json
 {
   "load_test_specs": [{
-    "name": "load_test_{pod}",
+    "name": "load_test",
     "nats_url": "${NATS_URL}",
     "nats_creds_file": "${NATS_CREDS_MOUNT_PATH}/admin.creds",
     "use_jetstream": true,
-    "client_id_prefix": "load_tester_{pod}",
+    "client_id_prefix": "load_tester",
     "streams": [{
-      "name_prefix": "load_stream_{pod}",
+      "name_prefix": "load_stream",
       "count": 5,
       "replicas": 1,
-      "subjects": ["test.{}.{pod}"],
+      "subjects": ["test.{}"],
       "max_msgs": 100000,
       "max_bytes": 104857600,
       "storage": "file"
     }],
     "publishers": {
       "count_per_stream": 10,
-      "stream_name_prefix": "load_stream_{pod}",
+      "stream_name_prefix": "load_stream",
       "publish_rate_per_second": 1000,
       "publish_pattern": "steady",
       "message_size_bytes": 1024,
       "track_latency": true
     },
     "consumers": {
-      "stream_name_prefix": "load_stream_{pod}",
+      "stream_name_prefix": "load_stream",
       "type": "pull",
       "count_per_stream": 5,
-      "durable_name_prefix": "consumer_{pod}",
+      "durable_name_prefix": "consumer",
       "ack_wait_seconds": 30,
       "max_ack_pending": 1000,
       "ack_policy": "explicit"
@@ -194,6 +182,7 @@ curl http://service-endpoint:9481/stats?limit=10
 ## TODO
 
 - [x] **CLI Operational Modes**: Add `--mode=publish|consume|both` CLI arguments for specialized pod roles
+- [ ] **Synchronize the replicas and distribute the load-generation across each pod**
 - [ ] **Unified Service Endpoint**: Create master service that accepts single configuration and forwards to all replicated pods
 - [ ] **NATS API Migration**: Update from deprecated JetStream API to newer `github.com/nats-io/nats.go/jetstream`
 - [ ] **Enhanced Metrics System**: Implement comprehensive metrics collection including system resources (CPU, memory, goroutines), NATS-specific metrics (connection health, bytes in/out), JetStream performance (storage usage, cluster status), enhanced latency analysis (P50, P90, P95, P99.9, P99.99 percentiles), throughput trends, error categorization, and test progress tracking. Add Prometheus export, real-time WebSocket streaming, and comparative analysis capabilities for production-grade observability.

@@ -1,18 +1,18 @@
 {
   "load_test_specs": [
     {
-      "name": "simple_high_throughput_{pod}",
+      "name": "simple_high_throughput",
       "nats_url": "${NATS_URL}",
       "nats_creds_file": "${NATS_CREDS_MOUNT_PATH}/admin.creds",
       "use_jetstream": true,
-      "client_id_prefix": "load_tester_{pod}",
+      "client_id_prefix": "load_tester",
       "streams": [
         {
-          "name_prefix": "load_stream_{pod}",
+          "name_prefix": "load_stream",
           "count": 10,
           "replicas": 1,
           "subjects": [
-            "test.subject.{}.{pod}"
+            "test.subject.{}"
           ],
           "messages_per_stream_per_second": 1000000,
           "retention": "limits",
@@ -28,7 +28,7 @@
       ],
       "publishers": {
         "count_per_stream": 50,
-        "stream_name_prefix": "load_stream_{pod}",
+        "stream_name_prefix": "load_stream",
         "publish_rate_per_second": 10000,
         "publish_pattern": "steady",
         "publish_burst_size": 1,
@@ -36,10 +36,10 @@
         "track_latency": false
       },
       "consumers": {
-        "stream_name_prefix": "load_stream_{pod}",
+        "stream_name_prefix": "load_stream",
         "type": "pull",
         "count_per_stream": 70,
-        "durable_name_prefix": "load_consumer_{pod}",
+        "durable_name_prefix": "load_consumer",
         "ack_wait_seconds": 5,
         "max_ack_pending": 1000,
         "consume_delay_ms": 50,
