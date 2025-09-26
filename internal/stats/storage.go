@@ -3,7 +3,7 @@ package stats
 import (
 	"time"
 
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/config"
 )
 
 type Storage interface {

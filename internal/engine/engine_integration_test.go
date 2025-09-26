@@ -12,8 +12,8 @@ import (
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
-	"go.bytebuilders.dev/nats-load-tester/internal/stats"
+	"go.opscenter.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
 )
 
@@ -69,7 +69,7 @@ func TestNATSStreamConfigurationIntegration(t *testing.T) {
 	}
 
 	t.Log("Creating engine...")
-	engine := NewEngine(logger, statsCollector)
+	engine := NewEngine(logger, statsCollector, true, true)
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
 		time.Duration(loadTestSpec.Duration()+5*time.Second),
@@ -108,7 +108,7 @@ func TestNATSStreamConfigurationIntegration(t *testing.T) {
 	}
 
 	t.Log("Waiting for engine to complete...")
-	if err = engine.eg.Wait(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+	if err = engine.errGroup.Wait(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Engine encountered an error: %v", err)
 	}
 

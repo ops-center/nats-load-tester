@@ -55,7 +55,7 @@ clean:
 	kubectl delete configmap nats-load-tester-config -n $(K8S_NAMESPACE) --ignore-not-found=true
 
 .PHONY: deploy
-deploy: push clean
+deploy: clean push
 	@echo "Deploying to Kubernetes..."
 	@echo "Using NATS URL: $(NATS_URL)"
 	# Apply configmap with dynamic NATS URL and creds path

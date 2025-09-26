@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
 )
 
@@ -53,7 +53,7 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 				MaxConsumers:         streamSpec.GetMaxConsumers(),
 			}
 
-			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5, func() error {
+			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5*time.Second, func() error {
 				err := sm.js.DeleteStream(streamName)
 				if err != nil && !errors.Is(err, nats.ErrStreamNotFound) {
 					return fmt.Errorf("failed to delete stream %s: %w", streamName, err)
@@ -85,7 +85,6 @@ func (sm *StreamManager) CleanupStreams(loadTestSpec *config.LoadTestSpec) error
 	for _, streamSpec := range loadTestSpec.Streams {
 		streamNames := streamSpec.GetFormattedStreamNames()
 		for _, streamName := range streamNames {
-
 			err := sm.js.DeleteStream(streamName)
 			if err != nil && err != nats.ErrStreamNotFound {
 				sm.logger.Warn("Failed to delete stream", zap.String("name", streamName), zap.Error(err))

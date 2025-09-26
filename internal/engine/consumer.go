@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -27,6 +28,7 @@ type ConsumerConfig struct {
 }
 
 type Consumer struct {
+	mu             sync.Mutex
 	nc             *nats.Conn
 	js             nats.JetStreamContext
 	config         ConsumerConfig
@@ -60,38 +62,35 @@ func (c *Consumer) Start(ctx context.Context) error {
 }
 
 func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
-	consumerInfo, err := c.js.ConsumerInfo(c.config.StreamName, c.config.DurableName)
-	if err != nil && err != nats.ErrConsumerNotFound {
-		return fmt.Errorf("failed to get consumer info: %w", err)
+	if err := c.js.DeleteConsumer(c.config.StreamName, c.config.DurableName); err != nil && err != nats.ErrConsumerNotFound {
+		return fmt.Errorf("failed to delete existing consumer: %w", err)
 	}
 
-	if consumerInfo == nil {
-		ackPolicy := nats.AckExplicitPolicy
-		switch c.config.AckPolicy {
-		case "none":
-			ackPolicy = nats.AckNonePolicy
-		case "all":
-			ackPolicy = nats.AckAllPolicy
-		}
+	ackPolicy := nats.AckExplicitPolicy
+	switch c.config.AckPolicy {
+	case "none":
+		ackPolicy = nats.AckNonePolicy
+	case "all":
+		ackPolicy = nats.AckAllPolicy
+	}
 
-		consumerConfig := &nats.ConsumerConfig{
-			Durable:       c.config.DurableName,
-			AckPolicy:     ackPolicy,
-			AckWait:       time.Duration(c.config.AckWaitSeconds) * time.Second,
-			MaxAckPending: c.config.MaxAckPending,
-			DeliverPolicy: nats.DeliverAllPolicy,
-		}
+	consumerConfig := &nats.ConsumerConfig{
+		Durable:       c.config.DurableName,
+		AckPolicy:     ackPolicy,
+		AckWait:       time.Duration(c.config.AckWaitSeconds) * time.Second,
+		MaxAckPending: c.config.MaxAckPending,
+		DeliverPolicy: nats.DeliverAllPolicy,
+	}
 
-		// For push consumers, we need to specify a DeliverSubject
-		if c.config.Type == "push" {
-			// Generate a unique delivery subject for this push consumer
-			consumerConfig.DeliverSubject = fmt.Sprintf("_INBOX.%s", c.config.DurableName)
-		}
+	// For push consumers, we need to specify a DeliverSubject
+	if c.config.Type == "push" {
+		// Generate a unique delivery subject for this push consumer
+		consumerConfig.DeliverSubject = fmt.Sprintf("_INBOX.%s", c.config.DurableName)
+	}
 
-		_, err = c.js.AddConsumer(c.config.StreamName, consumerConfig)
-		if err != nil {
-			return fmt.Errorf("failed to create consumer: %w", err)
-		}
+	_, err := c.js.AddConsumer(c.config.StreamName, consumerConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create consumer: %w", err)
 	}
 
 	if c.config.Type == "pull" {
@@ -105,7 +104,9 @@ func (c *Consumer) startPushConsumer() error {
 		c.handleMessage(msg)
 	}
 
-	sub, err := c.js.Subscribe(c.config.Subject, msgHandler,
+	sub, err := c.js.Subscribe(
+		c.config.Subject,
+		msgHandler,
 		nats.Durable(c.config.DurableName),
 		nats.ManualAck(),
 		nats.AckWait(time.Duration(c.config.AckWaitSeconds)*time.Second),
@@ -130,23 +131,30 @@ func (c *Consumer) startPullConsumer(ctx context.Context) error {
 
 	c.subscription = sub
 
-	for {
-		select {
-		case <-ctx.Done():
-			return c.Cleanup()
-		default:
-			msgs, err := sub.Fetch(10, nats.MaxWait(time.Second))
-			if err != nil && err != nats.ErrTimeout {
-				c.logger.Error("Failed to fetch messages", zap.Error(err))
-				c.statsCollector.RecordConsumeError(err)
-				continue
-			}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				if err := c.Cleanup(); err != nil {
+					c.logger.Error("Failed to cleanup pull consumer", zap.Error(err))
+				}
+				return
+			default:
+				msgs, err := sub.Fetch(10, nats.MaxWait(time.Second))
+				if err != nil && err != nats.ErrTimeout {
+					c.logger.Error("Failed to fetch messages", zap.Error(err))
+					c.statsCollector.RecordConsumeError(err)
+					continue
+				}
 
-			for _, msg := range msgs {
-				c.handleMessage(msg)
+				for _, msg := range msgs {
+					c.handleMessage(msg)
+				}
 			}
 		}
-	}
+	}()
+
+	return nil
 }
 
 func (c *Consumer) startCoreConsumer() error {
@@ -187,11 +195,15 @@ func (c *Consumer) handleMessage(msg *nats.Msg) {
 }
 
 func (c *Consumer) Cleanup() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.subscription != nil {
 		// Drain handles both unsubscribe and cleanup
 		if err := c.subscription.Drain(); err != nil {
 			return fmt.Errorf("failed to drain subscription: %w", err)
 		}
+		c.subscription = nil
 	}
 	return nil
 }
@@ -246,7 +258,9 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js nats.JetStreamContex
 					consumers = append(consumers, consumer)
 
 					consumerStartErrGroup.Go(func() error {
-						if err := consumer.Start(ctx); err != nil {
+						if err := exponentialBackoff(ctx, 1*time.Second, 2, 5, 5*time.Second, func() error {
+							return consumer.Start(ctx)
+						}); err != nil {
 							statsCollector.RecordError(err)
 							logger.Error("consumer failed",
 								zap.String("id", consumer.GetID()),

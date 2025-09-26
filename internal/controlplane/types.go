@@ -9,8 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
-	"go.bytebuilders.dev/nats-load-tester/internal/stats"
+	"go.opscenter.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
 )
 

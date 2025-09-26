@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
-	"go.bytebuilders.dev/nats-load-tester/internal/stats"
+	"go.opscenter.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
 )
 

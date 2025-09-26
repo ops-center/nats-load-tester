@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
 )
 

@@ -9,6 +9,7 @@ import (
 )
 
 func TestStreamSynchronizationValidation(t *testing.T) {
+	t.Setenv("POD_NAME", "0")
 	tests := []struct {
 		name      string
 		spec      *LoadTestSpec
@@ -20,10 +21,10 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 			spec: &LoadTestSpec{
 				Name:           "test",
 				NATSURL:        "nats://localhost:4222",
-				ClientIDPrefix: "test",
+				ClientIDPrefix: "test_{pod}",
 				Streams: []StreamSpec{
 					{
-						NamePrefix:                 "test_stream",
+						NamePrefix:                 "test_stream_{pod}",
 						Count:                      1,
 						Replicas:                   1,
 						Subjects:                   []string{"test.subject.{}"},
@@ -31,7 +32,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					},
 				},
 				Publishers: PublisherConfig{
-					StreamNamePrefix:     "test_stream",
+					StreamNamePrefix:     "test_stream_{pod}",
 					CountPerStream:       1,
 					PublishRatePerSecond: 100,
 					PublishPattern:       PublishPatternSteady,
@@ -40,10 +41,10 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					TrackLatency:         false,
 				},
 				Consumers: ConsumerConfig{
-					StreamNamePrefix:  "test_stream",
+					StreamNamePrefix:  "test_stream_{pod}",
 					Type:              "push",
 					CountPerStream:    1,
-					DurableNamePrefix: "test_consumer",
+					DurableNamePrefix: "test_consumer_{pod}",
 					AckWaitSeconds:    30,
 					MaxAckPending:     1000,
 					AckPolicy:         "explicit",
@@ -60,10 +61,10 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 			spec: &LoadTestSpec{
 				Name:           "test",
 				NATSURL:        "nats://localhost:4222",
-				ClientIDPrefix: "test",
+				ClientIDPrefix: "test_{pod}",
 				Streams: []StreamSpec{
 					{
-						NamePrefix:                 "test_stream",
+						NamePrefix:                 "test_stream_{pod}",
 						Count:                      1,
 						Replicas:                   1,
 						Subjects:                   []string{"test.subject.{}"},
@@ -71,7 +72,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					},
 				},
 				Publishers: PublisherConfig{
-					StreamNamePrefix:     "different_stream",
+					StreamNamePrefix:     "different_stream_{pod}",
 					CountPerStream:       1,
 					PublishRatePerSecond: 100,
 					PublishPattern:       PublishPatternSteady,
@@ -80,10 +81,10 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					TrackLatency:         false,
 				},
 				Consumers: ConsumerConfig{
-					StreamNamePrefix:  "test_stream",
+					StreamNamePrefix:  "test_stream_{pod}",
 					Type:              "push",
 					CountPerStream:    1,
-					DurableNamePrefix: "test_consumer",
+					DurableNamePrefix: "test_consumer_{pod}",
 					AckWaitSeconds:    30,
 					MaxAckPending:     1000,
 					AckPolicy:         "explicit",
@@ -94,17 +95,17 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				},
 			},
 			wantError: true,
-			errorMsg:  "publisher stream_name_prefix 'different_stream' must match consumer stream_name_prefix 'test_stream'",
+			errorMsg:  "publisher stream_name_prefix 'different_stream_0' must match consumer stream_name_prefix 'test_stream_0'",
 		},
 		{
 			name: "consumer stream prefix mismatch",
 			spec: &LoadTestSpec{
 				Name:           "test",
 				NATSURL:        "nats://localhost:4222",
-				ClientIDPrefix: "test",
+				ClientIDPrefix: "test_{pod}",
 				Streams: []StreamSpec{
 					{
-						NamePrefix:                 "test_stream",
+						NamePrefix:                 "test_stream_{pod}",
 						Count:                      1,
 						Replicas:                   1,
 						Subjects:                   []string{"test.subject.{}"},
@@ -112,7 +113,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					},
 				},
 				Publishers: PublisherConfig{
-					StreamNamePrefix:     "test_stream",
+					StreamNamePrefix:     "test_stream_{pod}",
 					CountPerStream:       1,
 					PublishRatePerSecond: 100,
 					PublishPattern:       PublishPatternSteady,
@@ -121,10 +122,10 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					TrackLatency:         false,
 				},
 				Consumers: ConsumerConfig{
-					StreamNamePrefix:  "different_stream",
+					StreamNamePrefix:  "different_stream_{pod}",
 					Type:              "push",
 					CountPerStream:    1,
-					DurableNamePrefix: "test_consumer",
+					DurableNamePrefix: "test_consumer_{pod}",
 					AckWaitSeconds:    30,
 					MaxAckPending:     1000,
 					AckPolicy:         "explicit",
@@ -135,17 +136,17 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				},
 			},
 			wantError: true,
-			errorMsg:  "publisher stream_name_prefix 'test_stream' must match consumer stream_name_prefix 'different_stream'",
+			errorMsg:  "publisher stream_name_prefix 'test_stream_0' must match consumer stream_name_prefix 'different_stream_0'",
 		},
 		{
 			name: "static subject format is valid",
 			spec: &LoadTestSpec{
 				Name:           "test",
 				NATSURL:        "nats://localhost:4222",
-				ClientIDPrefix: "test",
+				ClientIDPrefix: "test_{pod}",
 				Streams: []StreamSpec{
 					{
-						NamePrefix:                 "test_stream",
+						NamePrefix:                 "test_stream_{pod}",
 						Count:                      1,
 						Replicas:                   1,
 						Subjects:                   []string{"test.subject.static"},
@@ -153,7 +154,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					},
 				},
 				Publishers: PublisherConfig{
-					StreamNamePrefix:     "test_stream",
+					StreamNamePrefix:     "test_stream_{pod}",
 					CountPerStream:       1,
 					PublishRatePerSecond: 100,
 					PublishPattern:       PublishPatternSteady,
@@ -162,10 +163,10 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					TrackLatency:         false,
 				},
 				Consumers: ConsumerConfig{
-					StreamNamePrefix:  "test_stream",
+					StreamNamePrefix:  "test_stream_{pod}",
 					Type:              "push",
 					CountPerStream:    1,
-					DurableNamePrefix: "test_consumer",
+					DurableNamePrefix: "test_consumer_{pod}",
 					AckWaitSeconds:    30,
 					MaxAckPending:     1000,
 					AckPolicy:         "explicit",
@@ -182,10 +183,10 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 			spec: &LoadTestSpec{
 				Name:           "test",
 				NATSURL:        "nats://localhost:4222",
-				ClientIDPrefix: "test",
+				ClientIDPrefix: "test_{pod}",
 				Streams: []StreamSpec{
 					{
-						NamePrefix:                 "test_stream",
+						NamePrefix:                 "test_stream_{pod}",
 						Count:                      1,
 						Replicas:                   1,
 						Subjects:                   []string{"test.subject.{}"},
@@ -193,7 +194,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					},
 				},
 				Publishers: PublisherConfig{
-					StreamNamePrefix:     "test_stream",
+					StreamNamePrefix:     "test_stream_{pod}",
 					CountPerStream:       1,
 					PublishRatePerSecond: 100,
 					PublishPattern:       PublishPatternSteady,
@@ -202,10 +203,10 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					TrackLatency:         false,
 				},
 				Consumers: ConsumerConfig{
-					StreamNamePrefix:  "test_stream",
+					StreamNamePrefix:  "test_stream_{pod}",
 					Type:              "push",
 					CountPerStream:    1,
-					DurableNamePrefix: "test_consumer",
+					DurableNamePrefix: "test_consumer_{pod}",
 					AckWaitSeconds:    30,
 					MaxAckPending:     1000,
 					AckPolicy:         "explicit",
@@ -249,6 +250,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 }
 
 func TestStreamConfigHelperMethods(t *testing.T) {
+	t.Setenv("POD_NAME", "0")
 	tests := []struct {
 		name      string
 		stream    StreamSpec
@@ -263,7 +265,7 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 		{
 			name: "subjects with format placeholders",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}", "test.other.{}"},
@@ -283,7 +285,7 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 		{
 			name: "static subjects without placeholders",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"static.subject", "another.static"},
@@ -331,6 +333,7 @@ func TestStreamConfigHelperMethods(t *testing.T) {
 }
 
 func TestStreamConfigValidation(t *testing.T) {
+	t.Setenv("POD_NAME", "0")
 	tests := []struct {
 		name      string
 		stream    StreamSpec
@@ -340,7 +343,7 @@ func TestStreamConfigValidation(t *testing.T) {
 		{
 			name: "valid stream with all configurable options",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}"},
@@ -360,7 +363,7 @@ func TestStreamConfigValidation(t *testing.T) {
 		{
 			name: "valid stream with defaults (empty optional fields)",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}"},
@@ -371,7 +374,7 @@ func TestStreamConfigValidation(t *testing.T) {
 		{
 			name: "invalid retention policy",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}"},
@@ -384,7 +387,7 @@ func TestStreamConfigValidation(t *testing.T) {
 		{
 			name: "invalid storage type",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}"},
@@ -397,7 +400,7 @@ func TestStreamConfigValidation(t *testing.T) {
 		{
 			name: "invalid discard policy",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}"},
@@ -410,7 +413,7 @@ func TestStreamConfigValidation(t *testing.T) {
 		{
 			name: "invalid max_age duration",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}"},
@@ -423,7 +426,7 @@ func TestStreamConfigValidation(t *testing.T) {
 		{
 			name: "valid complex duration formats",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}"},
@@ -435,7 +438,7 @@ func TestStreamConfigValidation(t *testing.T) {
 		{
 			name: "invalid max_msgs (too negative)",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}"},
@@ -448,7 +451,7 @@ func TestStreamConfigValidation(t *testing.T) {
 		{
 			name: "invalid max_bytes (too negative)",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}"},
@@ -461,7 +464,7 @@ func TestStreamConfigValidation(t *testing.T) {
 		{
 			name: "valid unlimited values (-1)",
 			stream: StreamSpec{
-				NamePrefix:                 "test_stream",
+				NamePrefix:                 "test_stream_{pod}",
 				Count:                      1,
 				Replicas:                   1,
 				Subjects:                   []string{"test.subject.{}"},
@@ -497,6 +500,7 @@ func TestStreamConfigValidation(t *testing.T) {
 }
 
 func TestStreamSpecGetterMethods(t *testing.T) {
+	t.Setenv("POD_NAME", "0")
 	t.Run("GetRetentionPolicy", func(t *testing.T) {
 		tests := []struct {
 			name     string

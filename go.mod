@@ -1,4 +1,4 @@
-module go.bytebuilders.dev/nats-load-tester
+module go.opscenter.dev/nats-load-tester
 
 go 1.25.1
 

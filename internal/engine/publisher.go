@@ -3,13 +3,14 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -67,13 +68,9 @@ func NewPublisher(nc *nats.Conn, js nats.JetStreamContext, cfg PublisherConfig, 
 }
 
 func (p *Publisher) Start(ctx context.Context) error {
-	// Initial random delay to spread out publishers
-	time.Sleep(time.Duration(rand.Int63n(int64(100 * time.Millisecond))))
-
 	p.logger.Info("Starting publisher",
 		zap.String("id", p.config.ID),
 		zap.String("subject", p.config.Subject),
-		zap.Int32("rate", p.config.PublishRate),
 	)
 
 	// Start with a rate of 1/s, will be updated during ramp-up
@@ -99,13 +96,13 @@ func (p *Publisher) Start(ctx context.Context) error {
 			switch p.config.PublishPattern {
 			case config.PublishPatternSteady, config.PublishPatternRandom:
 				for range p.config.PublishBurstSize {
-					if err := p.publishMessage(); err != nil {
+					if err := p.publishMessage(); err != nil && !errors.Is(err, nats.ErrTimeout) && !errors.Is(err, nats.ErrConnectionClosed) {
 						p.logger.Error("failed to publish", zap.Error(err))
 						p.statsRecorder.RecordPublishError(err)
 					}
 				}
-				currentRate := p.GetCurrentRate()
-				if currentRate != lastRate {
+
+				if currentRate := p.GetCurrentRate(); currentRate != lastRate {
 					lastRate = currentRate
 					if err := p.updateTicker(ticker, currentRate); err != nil {
 						p.logger.Error("failed to update ticker", zap.Error(err))
@@ -172,11 +169,6 @@ func (p *Publisher) SetRate(rate int32) {
 	rate = max(rate, 1)
 	rate = min(rate, p.targetRate)
 	p.currentRate.Store(int32(rate))
-	p.logger.Debug("Publisher rate updated",
-		zap.String("id", p.config.ID),
-		zap.Int32("new_rate", rate),
-		zap.Int32("target_rate", p.targetRate),
-	)
 }
 
 // GetCurrentRate returns the current publishing rate

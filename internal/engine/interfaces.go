@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/config"
 )
 
 // PublisherInterface defines the interface for message publishers

@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
-	"go.bytebuilders.dev/nats-load-tester/internal/controlplane"
-	loadtest_engine "go.bytebuilders.dev/nats-load-tester/internal/engine"
-	"go.bytebuilders.dev/nats-load-tester/internal/stats"
+	"go.opscenter.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/controlplane"
+	loadtest_engine "go.opscenter.dev/nats-load-tester/internal/engine"
+	"go.opscenter.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
 )
 
@@ -19,9 +19,10 @@ type Manager struct {
 	httpServer    *controlplane.HTTPServer
 	logger        *zap.Logger
 	configChannel chan *config.Config
+	mode          string
 }
 
-func NewManager(port int, logger *zap.Logger) *Manager {
+func NewManager(port int, mode string, logger *zap.Logger) *Manager {
 	configChannel := make(chan *config.Config, 100)
 	httpServer := controlplane.NewHTTPServer(port, logger, configChannel)
 
@@ -29,6 +30,7 @@ func NewManager(port int, logger *zap.Logger) *Manager {
 		httpServer:    httpServer,
 		logger:        logger,
 		configChannel: configChannel,
+		mode:          mode,
 	}
 }
 
@@ -101,7 +103,7 @@ func (m *Manager) run(ctx context.Context) {
 
 			statsCollector := stats.NewCollector(m.logger, storage)
 			m.httpServer.SetCollector(statsCollector)
-			engine := loadtest_engine.NewEngine(m.logger, statsCollector)
+			engine := loadtest_engine.NewEngine(m.logger, statsCollector, m.mode == "both" || m.mode == "publish", m.mode == "both" || m.mode == "consume")
 
 			go func(ctx context.Context, cfg *config.Config, engine *loadtest_engine.Engine, storage stats.Storage) {
 				defer m.mutex.Unlock()
@@ -135,7 +137,7 @@ func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 		defer cancel()
 
 		if err := engine.Start(engineCtx, spec, cfg.StatsInterval()); err != nil {
-			return true, fmt.Errorf("failed to start engine: %w", err)
+			return false, fmt.Errorf("failed to start engine: %w", err)
 		}
 
 		select {
@@ -167,7 +169,6 @@ func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 		if err != nil {
 			m.logger.Error("failed to process load test spec", zap.Error(err))
 		}
-		time.Sleep(5 * time.Second)
 	}
 
 	if cfg.RepeatPolicy.Enabled && len(cfg.LoadTestSpecs) > 0 {
@@ -175,14 +176,7 @@ func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 		repeatCount := 1
 
 		for {
-			select { // Possibly redundant
-			case <-ctx.Done():
-				m.logger.Info("Context cancelled, stopping repeat configuration")
-				return nil
-			default:
-			}
-
-			m.logger.Info("======================================\n")
+			m.logger.Info("========================================================================================")
 			lastLoadTest.ApplyMultipliers(cfg.RepeatPolicy)
 
 			m.logger.Info("Starting repeat configuration",
@@ -190,7 +184,7 @@ func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 				zap.String("name", lastLoadTest.Name),
 			)
 
-			currentConfig, err := json.MarshalIndent(lastLoadTest, "", "  ")
+			currentConfig, err := json.Marshal(lastLoadTest)
 			if err != nil {
 				m.logger.Error("failed to marshal current config", zap.Error(err))
 			} else {

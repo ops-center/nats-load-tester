@@ -9,7 +9,7 @@ import (
 	"time"
 
 	badger "github.com/dgraph-io/badger/v4"
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
 )
 

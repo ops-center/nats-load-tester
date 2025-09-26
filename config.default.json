@@ -1,85 +1,86 @@
 {
   "load_test_specs": [
     {
-      "name": "100-streams-3-replicas-immediate",
-      "nats_url": "nats://localhost:4222",
-      "nats_creds_file": "/etc/nats/creds/admin.creds",
+      "name": "simple_high_throughput_{pod}",
+      "nats_url": "${NATS_URL}",
+      "nats_creds_file": "${NATS_CREDS_MOUNT_PATH}/admin.creds",
       "use_jetstream": true,
-      "client_id_prefix": "load-tester",
+      "client_id_prefix": "load_tester_{pod}",
       "streams": [
         {
-          "name_prefix": "load_stream",
-          "count": 3,
-          "replicas": 3,
+          "name_prefix": "load_stream_{pod}",
+          "count": 10,
+          "replicas": 1,
           "subjects": [
-            "test.subject.{}"
+            "test.subject.{}.{pod}"
           ],
-          "messages_per_stream_per_second": 1000,
+          "messages_per_stream_per_second": 1000000,
           "retention": "limits",
           "max_age": "5m",
-          "storage": "memory",
+          "storage": "file",
           "discard_new_per_subject": false,
           "discard": "old",
           "max_msgs": 100000,
-          "max_bytes": 104857600,
-          "max_msgs_per_subject": 10000,
-          "max_consumers": 50
+          "max_bytes": 214857600,
+          "max_msgs_per_subject": 10000000,
+          "max_consumers": 100
         }
       ],
       "publishers": {
-        "count_per_stream": 1,
-        "stream_name_prefix": "load_stream",
-        "publish_rate_per_second": 1000,
+        "count_per_stream": 50,
+        "stream_name_prefix": "load_stream_{pod}",
+        "publish_rate_per_second": 10000,
         "publish_pattern": "steady",
         "publish_burst_size": 1,
         "message_size_bytes": 1024,
-        "track_latency": true
+        "track_latency": false
       },
       "consumers": {
-        "stream_name_prefix": "load_stream",
-        "type": "push",
-        "count_per_stream": 1,
-        "durable_name_prefix": "load_consumer",
-        "ack_wait_seconds": 30,
+        "stream_name_prefix": "load_stream_{pod}",
+        "type": "pull",
+        "count_per_stream": 70,
+        "durable_name_prefix": "load_consumer_{pod}",
+        "ack_wait_seconds": 5,
         "max_ack_pending": 1000,
-        "consume_delay_ms": 0,
+        "consume_delay_ms": 50,
         "ack_policy": "explicit"
       },
       "behavior": {
-        "duration_seconds": 600,
+        "duration_seconds": 300,
         "ramp_up_seconds": 30
       },
       "log_limits": {
-        "max_lines": 200,
-        "max_bytes": 65536
+        "max_lines": 50,
+        "max_bytes": 16384
       }
     }
   ],
   "repeat_policy": {
     "enabled": true,
     "streams": {
-      "count_multiplier": 2,
+      "count_multiplier": 1,
       "replicas_multiplier": 1,
-      "messages_per_stream_per_second_multiplier": 1.5
+      "messages_per_stream_per_second_multiplier": 1
     },
     "behavior": {
       "duration_multiplier": 1.2,
-      "ramp_up_multiplier": 1.2
+      "ramp_up_multiplier": 1
     },
     "consumers": {
-      "ack_wait_multiplier": 1.5,
-      "max_ack_pending_multiplier": 1.5,
-      "consume_delay_multiplier": 1
+      "ack_wait_multiplier": 1,
+      "max_ack_pending_multiplier": 1,
+      "consume_delay_multiplier": 1,
+      "count_per_stream_multiplier": 1
     },
     "publishers": {
-      "count_per_stream_multiplier": 1,
-      "publish_rate_multiplier": 1,
+      "count_per_stream_multiplier": 1.2,
+      "publish_rate_multiplier": 2,
       "message_size_bytes_multiplier": 1
     }
   },
   "storage": {
     "type": "badger",
-    "path": ""
+    "path": "/var/lib/lt/load_test_stats.db"
   },
   "stats_collection_interval_seconds": 5
 }

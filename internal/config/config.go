@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -160,6 +162,25 @@ type Storage struct {
 	Path string `json:"path"`
 }
 
+var (
+	podName     string
+	podNameOnce sync.Once
+)
+
+func GetPodName() string {
+	podNameOnce.Do(func() {
+		podName = os.Getenv("POD_NAME")
+		if podName == "" {
+			if hostname, err := os.Hostname(); err == nil {
+				podName = hostname
+			} else {
+				podName = "local"
+			}
+		}
+	})
+	return podName
+}
+
 func (c *Config) Validate() error {
 	if len(c.LoadTestSpecs) == 0 {
 		return fmt.Errorf("at least one configuration required")
@@ -217,8 +238,8 @@ func (lts *LoadTestSpec) Validate() error {
 		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("at least one stream required"))
 	}
 
-	for i, stream := range lts.Streams {
-		if err := stream.Validate(); err != nil {
+	for i := range lts.Streams {
+		if err := lts.Streams[i].Validate(); err != nil {
 			loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("stream %d: %w", i, err))
 		}
 	}
@@ -240,8 +261,10 @@ func (lts *LoadTestSpec) Validate() error {
 	}
 
 	if lts.ClientIDPrefix == "" {
-		lts.ClientIDPrefix = "load-tester"
+		lts.ClientIDPrefix = "load-tester-{pod}"
 	}
+
+	lts.ClientIDPrefix = strings.ReplaceAll(lts.ClientIDPrefix, "{pod}", GetPodName())
 
 	return errors.Join(loadTestValidationErrors...)
 }
@@ -251,6 +274,7 @@ func (s *StreamSpec) Validate() error {
 	if s.NamePrefix == "" {
 		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("name_prefix required"))
 	}
+	s.NamePrefix = strings.ReplaceAll(s.NamePrefix, "{pod}", GetPodName())
 
 	if s.Count <= 0 {
 		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("count must be positive, got %d", s.Count))
@@ -313,7 +337,8 @@ func (s *StreamSpec) Validate() error {
 	}
 
 	for i := range s.Subjects {
-		s.Subjects[i] = strings.Replace(s.Subjects[i], "{}", "%d", 1)
+		s.Subjects[i] = strings.ReplaceAll(s.Subjects[i], "{}", "%d")
+		s.Subjects[i] = strings.ReplaceAll(s.Subjects[i], "{pod}", GetPodName())
 	}
 
 	return nil
@@ -325,6 +350,7 @@ func (p *PublisherConfig) Validate() error {
 	if p.StreamNamePrefix == "" {
 		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("stream_name_prefix required"))
 	}
+	p.StreamNamePrefix = strings.ReplaceAll(p.StreamNamePrefix, "{pod}", GetPodName())
 
 	if p.CountPerStream <= 0 {
 		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("count_per_stream must be positive, got %d", p.CountPerStream))
@@ -353,6 +379,7 @@ func (c *ConsumerConfig) Validate() error {
 	if c.StreamNamePrefix == "" {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("stream_name_prefix required"))
 	}
+	c.StreamNamePrefix = strings.ReplaceAll(c.StreamNamePrefix, "{pod}", GetPodName())
 
 	if c.CountPerStream <= 0 {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("count_per_stream must be positive, got %d", c.CountPerStream))
@@ -365,6 +392,7 @@ func (c *ConsumerConfig) Validate() error {
 	if c.DurableNamePrefix == "" {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("durable_name_prefix required"))
 	}
+	c.DurableNamePrefix = strings.ReplaceAll(c.DurableNamePrefix, "{pod}", GetPodName())
 
 	if c.AckWaitSeconds <= 0 {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("ack_wait_seconds must be positive, got %d", c.AckWaitSeconds))
@@ -387,8 +415,8 @@ func (b *BehaviorConfig) Validate() error {
 		behaviorValidationErrors = append(behaviorValidationErrors, fmt.Errorf("duration_seconds must be positive, got %d", b.DurationSeconds))
 	}
 
-	if b.RampUpSeconds <= 0 {
-		behaviorValidationErrors = append(behaviorValidationErrors, fmt.Errorf("ramp_up_seconds must be positive, got %d", b.RampUpSeconds))
+	if b.RampUpSeconds < 0 {
+		behaviorValidationErrors = append(behaviorValidationErrors, fmt.Errorf("ramp_up_seconds must be non-negative, got %d", b.RampUpSeconds))
 	}
 
 	return errors.Join(behaviorValidationErrors...)
@@ -435,8 +463,8 @@ func (rp *RepeatPolicy) Validate() error {
 		rp.Behavior.DurationMultiplier = 1.0
 	}
 
-	if rp.Behavior.RampUpMultiplier <= 0 {
-		rp.Behavior.RampUpMultiplier = 1.0
+	if rp.Behavior.RampUpMultiplier < 0 {
+		return fmt.Errorf("behavior.ramp_up_multiplier must be non-negative, got %f", rp.Behavior.RampUpMultiplier)
 	}
 
 	if rp.Consumers.AckWaitMultiplier <= 0 {

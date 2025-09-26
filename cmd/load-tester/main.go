@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"go.bytebuilders.dev/nats-load-tester/internal/loadtest"
+	"go.opscenter.dev/nats-load-tester/internal/loadtest"
 	"go.uber.org/zap"
 )
 
@@ -17,6 +17,7 @@ type cliArgs struct {
 	port             int
 	logLevel         string
 	useDefaultConfig bool
+	mode             string
 }
 
 func main() {
@@ -33,6 +34,7 @@ func main() {
 	rootCmd.PersistentFlags().IntVar(&args.port, "port", 9481, "HTTP server port")
 	rootCmd.PersistentFlags().StringVar(&args.logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().BoolVar(&args.useDefaultConfig, "use-default-config", false, "Load default configuration on startup")
+	rootCmd.PersistentFlags().StringVar(&args.mode, "mode", "both", "Operational mode (publish, consume, both)")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -43,6 +45,16 @@ func main() {
 func run(args *cliArgs) error {
 	if args == nil {
 		return fmt.Errorf("args cannot be nil")
+	}
+
+	// Validate mode argument
+	validModes := map[string]bool{
+		"publish": true,
+		"consume": true,
+		"both":    true,
+	}
+	if !validModes[args.mode] {
+		return fmt.Errorf("invalid mode '%s', must be one of: publish, consume, both", args.mode)
 	}
 
 	logger, err := loadtest.SetupLogger(args.logLevel)
@@ -61,7 +73,7 @@ func run(args *cliArgs) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	manager := loadtest.NewManager(args.port, logger)
+	manager := loadtest.NewManager(args.port, args.mode, logger)
 
 	if args.useDefaultConfig {
 		if err := manager.LoadDefaultConfig(args.configFilePath); err != nil {

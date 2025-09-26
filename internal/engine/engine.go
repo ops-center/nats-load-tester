@@ -7,34 +7,38 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"go.bytebuilders.dev/nats-load-tester/internal/config"
-	"go.bytebuilders.dev/nats-load-tester/internal/stats"
+	"go.opscenter.dev/nats-load-tester/internal/config"
+	"go.opscenter.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
 type Engine struct {
-	mu               sync.RWMutex
-	logger           *zap.Logger
-	statsCollector   *stats.Collector
-	nc               *nats.Conn
-	js               nats.JetStreamContext
-	loadTestSpec     *config.LoadTestSpec
-	publishers       []PublisherInterface
-	consumers        []ConsumerInterface
-	cancel           context.CancelFunc
-	eg               *errgroup.Group
-	streamManager    StreamManagerInterface
-	rampUpController RampUpControllerInterface
+	mu                   sync.RWMutex
+	logger               *zap.Logger
+	enablePublishers     bool
+	enableConsumers      bool
+	statsCollector       *stats.Collector
+	natsConn             *nats.Conn
+	natsJetStreamContext nats.JetStreamContext
+	loadTestSpec         *config.LoadTestSpec
+	publishers           []PublisherInterface
+	consumers            []ConsumerInterface
+	cancel               context.CancelFunc
+	errGroup             *errgroup.Group
+	streamManager        StreamManagerInterface
+	rampUpController     RampUpControllerInterface
 }
 
-func NewEngine(logger *zap.Logger, statsCollector *stats.Collector) *Engine {
+func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublishers, enableConsumers bool) *Engine {
 	return &Engine{
-		logger:         logger,
-		statsCollector: statsCollector,
-		publishers:     make([]PublisherInterface, 0),
-		consumers:      make([]ConsumerInterface, 0),
-		js:             nil,
+		logger:               logger,
+		statsCollector:       statsCollector,
+		enablePublishers:     enablePublishers,
+		enableConsumers:      enableConsumers,
+		publishers:           make([]PublisherInterface, 0),
+		consumers:            make([]ConsumerInterface, 0),
+		natsJetStreamContext: nil,
 	}
 }
 
@@ -58,15 +62,15 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	engineCtx, cancel := context.WithCancel(ctx)
 	e.cancel = cancel
 
-	e.eg, engineCtx = errgroup.WithContext(engineCtx)
+	e.errGroup, engineCtx = errgroup.WithContext(engineCtx)
 
 	if loadTestSpec.UseJetStream {
-		e.streamManager = NewStreamManager(e.js, e.logger)
+		e.streamManager = NewStreamManager(e.natsJetStreamContext, e.logger)
 	}
 	e.rampUpController = NewRampUpManager(e.logger, e.statsCollector)
 
 	// Start stats collector in errgroup
-	e.eg.Go(func() error {
+	e.errGroup.Go(func() error {
 		e.statsCollector.Start(engineCtx, statsInterval)
 		return nil
 	})
@@ -79,17 +83,21 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 		}
 	}
 
-	e.publishers = CreatePublishers(engineCtx, e.nc, e.js, loadTestSpec, e.statsCollector, e.logger, e.eg)
-
-	var err error
-	e.consumers, err = CreateConsumers(engineCtx, e.nc, e.js, loadTestSpec, e.statsCollector, e.logger, e.eg)
-	if err != nil {
-		e.cleanup()
-		e.logger.Error("Failed to start consumers", zap.Error(err))
-		return fmt.Errorf("failed to start consumers: %w", err)
+	if e.enablePublishers {
+		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
 	}
 
-	e.eg.Go(func() error {
+	var err error
+	if e.enableConsumers {
+		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
+		if err != nil {
+			e.cleanup()
+			e.logger.Error("Failed to start consumers", zap.Error(err))
+			return fmt.Errorf("failed to start consumers: %w", err)
+		}
+	}
+
+	e.errGroup.Go(func() error {
 		return e.rampUpController.Start(engineCtx, e.publishers, loadTestSpec.RampUpDuration())
 	})
 
@@ -107,8 +115,8 @@ func (e *Engine) Stop() error {
 	}
 
 	var err error
-	if e.eg != nil {
-		err = e.eg.Wait()
+	if e.errGroup != nil {
+		err = e.errGroup.Wait()
 	}
 
 	e.cleanup()
@@ -119,6 +127,8 @@ func (e *Engine) Stop() error {
 func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 	opts := []nats.Option{
 		nats.Name(loadTestSpec.ClientIDPrefix + "-engine"),
+		nats.RetryOnFailedConnect(true),
+		nats.ReconnectBufSize(100 * 1024 * 1024), // 100MB
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
@@ -142,15 +152,16 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 		return err
 	}
 
-	e.nc = nc
+	e.natsConn = nc
 
+	/// TODO: migrate to the newer "github.com/nats-io/nats.go/jetstream" api
 	if loadTestSpec.UseJetStream {
 		js, err := nc.JetStream()
 		if err != nil {
 			nc.Close()
 			return err
 		}
-		e.js = js
+		e.natsJetStreamContext = js
 	}
 
 	return nil
@@ -179,10 +190,14 @@ func (e *Engine) cleanup() {
 		}
 	}
 
-	if e.nc != nil && e.nc.IsConnected() {
-		e.nc.Close()
+	if e.natsConn != nil && e.natsConn.IsConnected() {
+		e.natsConn.Close()
 	}
 
+	e.natsJetStreamContext = nil
+	e.natsConn = nil
+	e.loadTestSpec = nil
+	e.streamManager = nil
 	e.publishers = e.publishers[:0]
 	e.consumers = e.consumers[:0]
 }
