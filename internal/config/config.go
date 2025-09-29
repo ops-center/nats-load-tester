@@ -204,6 +204,9 @@ func (c *Config) Validate() error {
 }
 
 func (lts *LoadTestSpec) Validate() error {
+	if lts == nil {
+		return fmt.Errorf("load test spec is nil")
+	}
 	loadTestValidationErrors := []error{}
 	if lts.Name == "" {
 		loadTestValidationErrors = append(loadTestValidationErrors, fmt.Errorf("name required"))
@@ -247,6 +250,9 @@ func (lts *LoadTestSpec) Validate() error {
 }
 
 func (s *StreamSpec) Validate() error {
+	if s == nil {
+		return fmt.Errorf("stream spec is nil")
+	}
 	streamValidationErrors := []error{}
 	if s.NamePrefix == "" {
 		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("name_prefix required"))
@@ -320,6 +326,9 @@ func (s *StreamSpec) Validate() error {
 }
 
 func (p *PublisherConfig) Validate() error {
+	if p == nil {
+		return fmt.Errorf("publisher config is nil")
+	}
 	publishValidationErrors := []error{}
 
 	if p.StreamNamePrefix == "" {
@@ -354,8 +363,8 @@ func (c *ConsumerConfig) Validate() error {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("stream_name_prefix required"))
 	}
 
-	if c.CountPerStream <= 0 {
-		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("count_per_stream must be positive, got %d", c.CountPerStream))
+	if c.CountPerStream < 0 {
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("count_per_stream must be non-negative, got %d", c.CountPerStream))
 	}
 
 	if c.Type != consumerTypePush && c.Type != consumerTypePull {
@@ -366,12 +375,12 @@ func (c *ConsumerConfig) Validate() error {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("durable_name_prefix required"))
 	}
 
-	if c.AckWaitSeconds <= 0 {
-		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("ack_wait_seconds must be positive, got %d", c.AckWaitSeconds))
+	if c.AckWaitSeconds < 0 {
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("ack_wait_seconds must be non-negative, got %d", c.AckWaitSeconds))
 	}
 
-	if c.MaxAckPending <= 0 {
-		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("max_ack_pending must be positive, got %d", c.MaxAckPending))
+	if c.MaxAckPending < 0 {
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("max_ack_pending must be non-negative, got %d", c.MaxAckPending))
 	}
 
 	if c.AckPolicy == "" {
@@ -413,61 +422,107 @@ func (lts *LoadTestSpec) Hash() string {
 	return fmt.Sprintf("%x", h)
 }
 
-// TODO: split and refactor these components into individual validation methods
 func (rp *RepeatPolicy) Validate() error {
 	if !rp.Enabled {
 		return nil
 	}
 
-	if rp.Streams.CountMultiplier <= 0 {
-		rp.Streams.CountMultiplier = 1.0
+	var repeatPolicyErrors []error
+	if err := rp.Streams.Validate(); err != nil {
+		repeatPolicyErrors = append(repeatPolicyErrors, fmt.Errorf("streams: %w", err))
 	}
 
-	if rp.Streams.ReplicasMultiplier <= 0 {
-		rp.Streams.ReplicasMultiplier = 1.0
+	if err := rp.Behavior.Validate(); err != nil {
+		repeatPolicyErrors = append(repeatPolicyErrors, fmt.Errorf("behavior: %w", err))
 	}
 
-	if rp.Streams.MessagesPerStreamPerSecondMultiplier <= 0 {
-		rp.Streams.MessagesPerStreamPerSecondMultiplier = 1.0
+	if err := rp.Consumers.Validate(); err != nil {
+		repeatPolicyErrors = append(repeatPolicyErrors, fmt.Errorf("consumers: %w", err))
 	}
 
-	if rp.Behavior.DurationMultiplier <= 0 {
-		rp.Behavior.DurationMultiplier = 1.0
+	if err := rp.Publishers.Validate(); err != nil {
+		repeatPolicyErrors = append(repeatPolicyErrors, fmt.Errorf("publishers: %w", err))
 	}
 
-	if rp.Behavior.RampUpMultiplier < 0 {
-		return fmt.Errorf("behavior.ramp_up_multiplier must be non-negative, got %f", rp.Behavior.RampUpMultiplier)
+	return errors.Join(repeatPolicyErrors...)
+}
+
+func (s *StreamMultipliers) Validate() error {
+	if s == nil {
+		return fmt.Errorf("stream multipliers required when repeat_policy is enabled")
+	}
+	var streamMultiplierErrors []error
+	if s.CountMultiplier < 1.0 {
+		streamMultiplierErrors = append(streamMultiplierErrors, fmt.Errorf("count_multiplier must be >= 1.0, got %f", s.CountMultiplier))
 	}
 
-	if rp.Consumers.AckWaitMultiplier <= 0 {
-		rp.Consumers.AckWaitMultiplier = 1.0
+	if s.ReplicasMultiplier < 1.0 {
+		streamMultiplierErrors = append(streamMultiplierErrors, fmt.Errorf("replicas_multiplier must be >= 1.0, got %f", s.ReplicasMultiplier))
 	}
 
-	if rp.Consumers.MaxAckPendingMultiplier <= 0 {
-		rp.Consumers.MaxAckPendingMultiplier = 1.0
+	if s.MessagesPerStreamPerSecondMultiplier < 1.0 {
+		streamMultiplierErrors = append(streamMultiplierErrors, fmt.Errorf("messages_per_stream_per_second_multiplier must be >= 1.0, got %f", s.MessagesPerStreamPerSecondMultiplier))
 	}
 
-	if rp.Consumers.ConsumeDelayMultiplier <= 0 {
-		rp.Consumers.ConsumeDelayMultiplier = 1.0
+	return errors.Join(streamMultiplierErrors...)
+}
+
+func (b *BehaviorMultipliers) Validate() error {
+	if b == nil {
+		return fmt.Errorf("behavior multipliers required when repeat_policy is enabled")
+	}
+	var behaviorMultiplierErrors []error
+	if b.DurationMultiplier < 1.0 {
+		behaviorMultiplierErrors = append(behaviorMultiplierErrors, fmt.Errorf("duration_multiplier must be >= 1.0, got %f", b.DurationMultiplier))
+	}
+	if b.RampUpMultiplier < 1.0 {
+		behaviorMultiplierErrors = append(behaviorMultiplierErrors, fmt.Errorf("ramp_up_multiplier must be >= 1.0, got %f", b.RampUpMultiplier))
 	}
 
-	if rp.Consumers.CountPerStreamMultiplier <= 0 {
-		rp.Consumers.CountPerStreamMultiplier = 1.0
+	return errors.Join(behaviorMultiplierErrors...)
+}
+
+func (c *ConsumerMultipliers) Validate() error {
+	if c == nil {
+		return fmt.Errorf("consumer multipliers required when repeat_policy is enabled")
+	}
+	var consumerMultiplierErrors []error
+	if c.AckWaitMultiplier < 1.0 {
+		consumerMultiplierErrors = append(consumerMultiplierErrors, fmt.Errorf("ack_wait_multiplier must be >= 1.0, got %f", c.AckWaitMultiplier))
 	}
 
-	if rp.Publishers.CountPerStreamMultiplier <= 0 {
-		rp.Publishers.CountPerStreamMultiplier = 1.0
+	if c.MaxAckPendingMultiplier < 1.0 {
+		consumerMultiplierErrors = append(consumerMultiplierErrors, fmt.Errorf("max_ack_pending_multiplier must be >= 1.0, got %f", c.MaxAckPendingMultiplier))
 	}
 
-	if rp.Publishers.PublishRateMultiplier <= 0 {
-		rp.Publishers.PublishRateMultiplier = 1.0
+	if c.ConsumeDelayMultiplier < 1.0 {
+		consumerMultiplierErrors = append(consumerMultiplierErrors, fmt.Errorf("consume_delay_multiplier must be >= 1.0, got %f", c.ConsumeDelayMultiplier))
 	}
 
-	if rp.Publishers.MessageSizeBytesMultiplier <= 0 {
-		rp.Publishers.MessageSizeBytesMultiplier = 1.0
+	if c.CountPerStreamMultiplier < 1.0 {
+		consumerMultiplierErrors = append(consumerMultiplierErrors, fmt.Errorf("count_per_stream_multiplier must be >= 1.0, got %f", c.CountPerStreamMultiplier))
 	}
 
-	return nil
+	return errors.Join(consumerMultiplierErrors...)
+}
+
+func (p *PublisherMultipliers) Validate() error {
+	if p == nil {
+		return fmt.Errorf("publisher multipliers required when repeat_policy is enabled")
+	}
+	var publisherMultiplierErrors []error
+	if p.CountPerStreamMultiplier < 1.0 {
+		publisherMultiplierErrors = append(publisherMultiplierErrors, fmt.Errorf("count_per_stream_multiplier must be >= 1.0, got %f", p.CountPerStreamMultiplier))
+	}
+
+	if p.PublishRateMultiplier < 1.0 {
+		publisherMultiplierErrors = append(publisherMultiplierErrors, fmt.Errorf("publish_rate_multiplier must be >= 1.0, got %f", p.PublishRateMultiplier))
+	}
+
+	if p.MessageSizeBytesMultiplier < 1.0 {
+		publisherMultiplierErrors = append(publisherMultiplierErrors, fmt.Errorf("message_size_bytes_multiplier must be >= 1.0, got %f", p.MessageSizeBytesMultiplier))
+	}
+	return errors.Join(publisherMultiplierErrors...)
 }
 
 func (lts *LoadTestSpec) ApplyMultipliers(rp RepeatPolicy) {
