@@ -128,7 +128,7 @@ func (m *Manager) run(ctx context.Context) {
 					m.httpServer.SetCollector(nil)
 					m.httpServer.SetConfig(nil)
 					if engine != nil {
-						if err := engine.Stop(); err != nil {
+						if err := engine.Stop(ctx); err != nil {
 							m.logger.Error("engine wait failed", zap.Error(err))
 						}
 					}
@@ -163,7 +163,7 @@ func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 			m.logger.Info(specName+" spec completed", zap.String("name", spec.Name))
 		}
 
-		if err := engine.Stop(); err != nil {
+		if err := engine.Stop(ctx); err != nil {
 			m.logger.Error("engine wait failed", zap.Error(err))
 		}
 		return false, nil
