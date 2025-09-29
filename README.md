@@ -4,10 +4,24 @@ NATS JetStream load testing tool for Kubernetes clusters.
 
 ## Kubernetes Deployment
 
+### ⚠️TEMPORARY HACK FOR RUNNING ACE-NATS IN CLUSTER-MODE
+```bash
+#install yq 4.2.0
+export VERSION=v4.2.0;
+export BINARY=yq_linux_amd64;
+wget https://github.com/mikefarah/yq/releases/download/${VERSION}/${BINARY}.tar.gz -O - |\tar xz;
+sudo mv ${BINARY} /usr/bin/yq
+```
+
+```bash
+sudo chmod +x ./hack/patch-nats-config.sh
+./hack/patch-nats-config.sh
+kubectl patch sts -n ace ace-nats -p '{"spec":{"replicas":3}}'
+```
+
 ```bash
 # Deploy to cluster
 make deploy
-
 ```
 
 ## Deployment Customization
