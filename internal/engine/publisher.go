@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -45,7 +46,7 @@ type PublisherConfig struct {
 
 type Publisher struct {
 	nc            *nats.Conn
-	js            nats.JetStreamContext
+	js            jetstream.JetStream
 	config        PublisherConfig
 	statsRecorder statsCollector
 	logger        *zap.Logger
@@ -63,7 +64,7 @@ type statsCollector interface {
 	RecordError(error)
 }
 
-func NewPublisher(nc *nats.Conn, js nats.JetStreamContext, cfg PublisherConfig, statsCollector statsCollector, logger *zap.Logger) PublisherInterface {
+func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, statsCollector statsCollector, logger *zap.Logger) PublisherInterface {
 	messageData := make([]byte, cfg.MessageSize)
 	if cfg.MessageSize > 8 {
 		for i := int32(8); i < cfg.MessageSize; i++ {
@@ -112,7 +113,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 			switch p.config.PublishPattern {
 			case config.PublishPatternSteady, config.PublishPatternRandom:
 				for range p.config.PublishBurstSize {
-					if err := p.publishMessage(); err != nil && !errors.Is(err, nats.ErrTimeout) && !errors.Is(err, nats.ErrConnectionClosed) {
+					if err := p.publishMessage(ctx); err != nil && !errors.Is(err, nats.ErrTimeout) && !errors.Is(err, nats.ErrConnectionClosed) {
 						p.logger.Error("failed to publish", zap.Error(err))
 						p.statsRecorder.RecordPublishError(err)
 					}
@@ -156,7 +157,7 @@ func (p *Publisher) calculatePublishInterval(currentRate int32) (time.Duration, 
 	}
 }
 
-func (p *Publisher) publishMessage() error {
+func (p *Publisher) publishMessage(ctx context.Context) error {
 	message := make([]byte, len(p.messageData))
 	copy(message, p.messageData)
 
@@ -167,7 +168,7 @@ func (p *Publisher) publishMessage() error {
 
 	var err error
 	if p.config.UseJetStream && p.js != nil {
-		_, err = p.js.Publish(p.config.Subject, message)
+		_, err = p.js.Publish(ctx, p.config.Subject, message)
 	} else {
 		err = p.nc.Publish(p.config.Subject, message)
 	}
@@ -213,7 +214,7 @@ func (p *Publisher) GetSubject() string {
 }
 
 // CreatePublishers creates and starts publishers based on the load test spec and stream configurations
-func CreatePublishers(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) []PublisherInterface {
+func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) []PublisherInterface {
 	publishers := make([]PublisherInterface, 0)
 
 	for _, streamSpec := range loadTestSpec.Streams {

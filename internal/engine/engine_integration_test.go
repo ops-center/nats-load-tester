@@ -28,6 +28,7 @@ import (
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.opscenter.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
@@ -129,8 +130,8 @@ func TestNATSStreamConfigurationIntegration(t *testing.T) {
 	}
 
 	// Stop the engine
-	err = engine.Stop()
-	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+	err = engine.Stop(ctx)
+	if err != nil {
 		t.Errorf("Failed to stop engine: %v", err)
 	}
 
@@ -250,7 +251,7 @@ func verifyStreamConfiguration(t *testing.T, natsURL string, loadTestSpec *confi
 	}
 	defer nc.Close()
 
-	js, err := nc.JetStream()
+	js, err := jetstream.New(nc)
 	if err != nil {
 		return fmt.Errorf("failed to create JetStream context: %w", err)
 	}
@@ -260,9 +261,14 @@ func verifyStreamConfiguration(t *testing.T, natsURL string, loadTestSpec *confi
 		for i := int32(0); i < streamSpec.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", streamSpec.NamePrefix, i+1)
 
-			streamInfo, err := js.StreamInfo(streamName)
+			stream, err := js.Stream(context.Background(), streamName)
 			if err != nil {
 				return fmt.Errorf("stream %s not found: %w", streamName, err)
+			}
+
+			streamInfo, err := stream.Info(context.Background())
+			if err != nil {
+				return fmt.Errorf("failed to get stream info for %s: %w", streamName, err)
 			}
 
 			cfg := streamInfo.Config
@@ -319,7 +325,7 @@ func verifyWorkflow(t *testing.T, natsURL string, loadTestSpec *config.LoadTestS
 	}
 	defer nc.Close()
 
-	js, err := nc.JetStream()
+	js, err := jetstream.New(nc)
 	if err != nil {
 		return fmt.Errorf("failed to create JetStream context: %w", err)
 	}
@@ -333,7 +339,12 @@ func verifyWorkflow(t *testing.T, natsURL string, loadTestSpec *config.LoadTestS
 		for i := int32(0); i < streamSpec.Count; i++ {
 			streamName := fmt.Sprintf("%s_%d", streamSpec.NamePrefix, i+1)
 
-			streamInfo, err := js.StreamInfo(streamName)
+			stream, err := js.Stream(context.Background(), streamName)
+			if err != nil {
+				return fmt.Errorf("failed to get stream for %s: %w", streamName, err)
+			}
+
+			streamInfo, err := stream.Info(context.Background())
 			if err != nil {
 				return fmt.Errorf("failed to get stream info for %s: %w", streamName, err)
 			}

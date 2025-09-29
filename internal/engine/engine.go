@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.opscenter.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
@@ -36,7 +37,7 @@ type Engine struct {
 	enableConsumers      bool
 	statsCollector       *stats.Collector
 	natsConn             *nats.Conn
-	natsJetStreamContext nats.JetStreamContext
+	natsJetStreamContext jetstream.JetStream
 	loadTestSpec         *config.LoadTestSpec
 	publishers           []PublisherInterface
 	consumers            []ConsumerInterface
@@ -94,7 +95,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	if loadTestSpec.UseJetStream {
 		if err := e.streamManager.SetupStreams(engineCtx, loadTestSpec); err != nil {
 			e.logger.Error("Failed to setup streams", zap.Error(err))
-			e.cleanup()
+			e.cleanup(30 * time.Second)
 			return fmt.Errorf("failed to setup streams: %w", err)
 		}
 	}
@@ -107,7 +108,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	if e.enableConsumers {
 		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
 		if err != nil {
-			e.cleanup()
+			e.cleanup(30 * time.Second)
 			e.logger.Error("Failed to start consumers", zap.Error(err))
 			return fmt.Errorf("failed to start consumers: %w", err)
 		}
@@ -120,7 +121,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	return nil
 }
 
-func (e *Engine) Stop() error {
+func (e *Engine) Stop(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -135,7 +136,7 @@ func (e *Engine) Stop() error {
 		err = e.errGroup.Wait()
 	}
 
-	e.cleanup()
+	e.cleanup(30 * time.Second)
 
 	return err
 }
@@ -170,9 +171,8 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 
 	e.natsConn = nc
 
-	/// TODO: migrate to the newer "github.com/nats-io/nats.go/jetstream" api
 	if loadTestSpec.UseJetStream {
-		js, err := nc.JetStream()
+		js, err := jetstream.New(e.natsConn)
 		if err != nil {
 			nc.Close()
 			return err
@@ -183,10 +183,13 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 	return nil
 }
 
-func (e *Engine) cleanup() {
+func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 	if e.cancel != nil {
 		e.cancel()
 	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
 
 	// Clean up consumers
 	for _, consumer := range e.consumers {
@@ -201,7 +204,7 @@ func (e *Engine) cleanup() {
 
 	// Clean up streams if JetStream is enabled
 	if e.loadTestSpec != nil && e.loadTestSpec.UseJetStream && e.streamManager != nil {
-		if err := e.streamManager.CleanupStreams(e.loadTestSpec); err != nil {
+		if err := e.streamManager.CleanupStreams(cleanupCtx, e.loadTestSpec); err != nil {
 			e.logger.Error("Stream cleanup failed", zap.Error(err))
 		}
 	}

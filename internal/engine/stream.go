@@ -22,19 +22,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
 )
 
 // StreamManager handles JetStream stream operations
 type StreamManager struct {
-	js     nats.JetStreamContext
+	js     jetstream.StreamManager
 	logger *zap.Logger
 }
 
 // NewStreamManager creates a new StreamManager
-func NewStreamManager(js nats.JetStreamContext, logger *zap.Logger) *StreamManager {
+func NewStreamManager(js jetstream.StreamManager, logger *zap.Logger) *StreamManager {
 	return &StreamManager{
 		js:     js,
 		logger: logger,
@@ -53,7 +53,7 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 		for streamIndex, streamName := range streamNames {
 			subjects := streamSpec.GetFormattedSubjects(int32(streamIndex + 1))
 
-			streamConfig := &nats.StreamConfig{
+			streamConfig := jetstream.StreamConfig{
 				Name:     streamName,
 				Subjects: subjects,
 				Replicas: int(streamSpec.Replicas),
@@ -70,8 +70,8 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 			}
 
 			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5*time.Second, func() error {
-				err := sm.js.DeleteStream(streamName)
-				if err != nil && !errors.Is(err, nats.ErrStreamNotFound) {
+				err := sm.js.DeleteStream(ctx, streamName)
+				if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
 					return fmt.Errorf("failed to delete stream %s: %w", streamName, err)
 				}
 				sm.logger.Info("Deleted stream", zap.String("name", streamName))
@@ -81,7 +81,7 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 			}
 
 			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5, func() error {
-				_, err := sm.js.AddStream(streamConfig)
+				_, err := sm.js.CreateStream(ctx, streamConfig)
 				if err != nil {
 					return fmt.Errorf("failed to create stream %s: %w", streamName, err)
 				}
@@ -97,12 +97,12 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 }
 
 // CleanupStreams removes streams created during the test
-func (sm *StreamManager) CleanupStreams(loadTestSpec *config.LoadTestSpec) error {
+func (sm *StreamManager) CleanupStreams(cleanupCtx context.Context, loadTestSpec *config.LoadTestSpec) error {
 	for _, streamSpec := range loadTestSpec.Streams {
 		streamNames := streamSpec.GetFormattedStreamNames()
 		for _, streamName := range streamNames {
-			err := sm.js.DeleteStream(streamName)
-			if err != nil && err != nats.ErrStreamNotFound {
+			err := sm.js.DeleteStream(cleanupCtx, streamName)
+			if err != nil && err != jetstream.ErrStreamNotFound {
 				sm.logger.Warn("Failed to delete stream", zap.String("name", streamName), zap.Error(err))
 			} else if err == nil {
 				sm.logger.Info("Deleted stream", zap.String("name", streamName))

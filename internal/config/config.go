@@ -24,13 +24,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // Validation constants
 const (
-	consumerTypePush     = "push"
-	consumerTypePull     = "pull"
+	ConsumerTypePush     = "push"
+	ConsumerTypePull     = "pull"
 	defaultStatsInterval = 5
 )
 
@@ -383,8 +383,8 @@ func (c *ConsumerConfig) Validate() error {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("count_per_stream must be non-negative, got %d", c.CountPerStream))
 	}
 
-	if c.Type != consumerTypePush && c.Type != consumerTypePull {
-		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("type must be '%s' or '%s', got '%s'", consumerTypePush, consumerTypePull, c.Type))
+	if c.Type != ConsumerTypePush && c.Type != ConsumerTypePull {
+		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("type must be '%s' or '%s', got '%s'", ConsumerTypePush, ConsumerTypePull, c.Type))
 	}
 
 	if c.DurableNamePrefix == "" {
@@ -647,35 +647,35 @@ func (s *StreamSpec) GetFormattedStreamNames() []string {
 
 // Stream configuration methods that return NATS types
 
-// GetRetentionPolicy returns the appropriate nats.RetentionPolicy for this stream
-func (s *StreamSpec) GetRetentionPolicy() nats.RetentionPolicy {
+// GetRetentionPolicy returns the appropriate jetstream.RetentionPolicy for this stream
+func (s *StreamSpec) GetRetentionPolicy() jetstream.RetentionPolicy {
 	switch s.Retention {
 	case RetentionInterest:
-		return nats.InterestPolicy
+		return jetstream.InterestPolicy
 	case RetentionWorkQueue:
-		return nats.WorkQueuePolicy
+		return jetstream.WorkQueuePolicy
 	default: // RetentionLimits or empty
-		return nats.LimitsPolicy
+		return jetstream.LimitsPolicy
 	}
 }
 
-// GetStorageType returns the appropriate nats.StorageType for this stream
-func (s *StreamSpec) GetStorageType() nats.StorageType {
+// GetStorageType returns the appropriate jetstream.StorageType for this stream
+func (s *StreamSpec) GetStorageType() jetstream.StorageType {
 	switch s.Storage {
 	case StorageFile:
-		return nats.FileStorage
+		return jetstream.FileStorage
 	default: // StorageMemory or empty
-		return nats.MemoryStorage
+		return jetstream.MemoryStorage
 	}
 }
 
-// GetDiscardPolicy returns the appropriate nats.DiscardPolicy for this stream
-func (s *StreamSpec) GetDiscardPolicy() nats.DiscardPolicy {
+// GetDiscardPolicy returns the appropriate jetstream.DiscardPolicy for this stream
+func (s *StreamSpec) GetDiscardPolicy() jetstream.DiscardPolicy {
 	switch s.Discard {
 	case DiscardNew:
-		return nats.DiscardNew
+		return jetstream.DiscardNew
 	default: // DiscardOld or empty
-		return nats.DiscardOld
+		return jetstream.DiscardOld
 	}
 }
 

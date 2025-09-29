@@ -46,7 +46,7 @@ type ConsumerInterface interface {
 // StreamManagerInterface defines the interface for stream management
 type StreamManagerInterface interface {
 	SetupStreams(ctx context.Context, loadTestSpec *config.LoadTestSpec) error
-	CleanupStreams(loadTestSpec *config.LoadTestSpec) error
+	CleanupStreams(ctx context.Context, loadTestSpec *config.LoadTestSpec) error
 }
 
 // RampUpControllerInterface manages the ramp-up process
