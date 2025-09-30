@@ -102,7 +102,7 @@ func run(args *cliArgs) error {
 	}
 
 	var mgrDoneErr error
-	mgrDoneCh := manager.Done()
+	mgrDoneCh := manager.DoneCh()
 
 	select {
 	case <-sigCh:

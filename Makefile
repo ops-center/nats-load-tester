@@ -11,11 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 # Configurable variables
-DOCKER_REGISTRY ?= sami7786
+DOCKER_REGISTRY ?= $(REGISTRY)
+ifeq ($(DOCKER_REGISTRY),)
+$(error DOCKER_REGISTRY must be set via DOCKER_REGISTRY variable or REGISTRY environment variable)
+endif
 IMAGE_NAME ?= nats-load-tester
 VERSION ?= latest
 K8S_NAMESPACE ?= ace
+
 NATS_SERVICE_NAME ?= ace-nats
 NATS_SERVICE_NAMESPACE ?= ace
 NATS_PORT ?= 4222

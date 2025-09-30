@@ -26,20 +26,20 @@ data:
               ],
               "messages_per_stream_per_second": 10000000,
               "retention": "limits",
-              "max_age": "5m",
+              "max_age": "2m",
               "storage": "file",
               "discard_new_per_subject": false,
               "discard": "old",
-              "max_msgs": 1000000,
-              "max_bytes": 214857600,
-              "max_msgs_per_subject": 10000000,
-              "max_consumers": 100
+              "max_msgs": 100000000,
+              "max_bytes": 2648576000,
+              "max_msgs_per_subject": 100000000,
+              "max_consumers": 100000
             }
           ],
           "publishers": {
             "count_per_stream": 50,
             "stream_name_prefix": "load_stream",
-            "publish_rate_per_second": 100000,
+            "publish_rate_per_second": 100000000,
             "publish_pattern": "steady",
             "publish_burst_size": 1,
             "message_size_bytes": 1024,
@@ -56,8 +56,8 @@ data:
             "ack_policy": "explicit"
           },
           "behavior": {
-            "duration_seconds": 300,
-            "ramp_up_seconds": 30
+            "duration_seconds": 30,
+            "ramp_up_seconds": 1
           },
           "log_limits": {
             "max_lines": 50,
