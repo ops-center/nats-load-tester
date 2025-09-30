@@ -30,6 +30,15 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	ConfigUpdateThrottleLimit = 10
+	RequestTimeoutSeconds     = 60
+	MaxHeaderBytes            = 1 << 20
+	ReadTimeoutSeconds        = 10
+	WriteTimeoutSeconds       = 10
+	IdleTimeoutSeconds        = 120
+)
+
 type HTTPServer struct {
 	mu                sync.RWMutex
 	configManager     configManager
@@ -58,18 +67,31 @@ func (h *HTTPServer) Start(ctx context.Context) error {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	r.Use(middleware.Timeout(RequestTimeoutSeconds * time.Second))
 
-	r.Post("/config", h.handleConfigUpdate)
-	r.Get("/config", h.handleConfigGet)
+	// Healthcheck endpoint without logging
 	r.Get("/healthcheck", h.handleCheckHealth)
-	r.Get("/stats", h.handleGetStatsHistory)
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Logger)
+
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.Throttle(ConfigUpdateThrottleLimit))
+			r.Post("/config", h.handleConfigUpdate)
+		})
+
+		r.Get("/config", h.handleConfigGet)
+		r.Get("/stats", h.handleGetStatsHistory)
+	})
 
 	h.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", h.port),
-		Handler: r,
+		Addr:           fmt.Sprintf(":%d", h.port),
+		Handler:        r,
+		MaxHeaderBytes: MaxHeaderBytes,
+		ReadTimeout:    ReadTimeoutSeconds * time.Second,
+		WriteTimeout:   WriteTimeoutSeconds * time.Second,
+		IdleTimeout:    IdleTimeoutSeconds * time.Second,
 	}
 
 	h.logger.Info("Starting HTTP server", zap.Int("port", h.port))
@@ -89,7 +111,7 @@ func (h *HTTPServer) Stop() error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), ServerShutdownTimeout)
 	defer cancel()
 
 	return h.server.Shutdown(ctx)

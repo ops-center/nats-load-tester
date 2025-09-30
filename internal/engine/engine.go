@@ -45,6 +45,7 @@ type Engine struct {
 	errGroup             *errgroup.Group
 	streamManager        StreamManagerInterface
 	rampUpController     RampUpControllerInterface
+	circuitBreaker       circuitBreaker
 }
 
 func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublishers, enableConsumers bool) *Engine {
@@ -56,6 +57,7 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublis
 		publishers:           make([]PublisherInterface, 0),
 		consumers:            make([]ConsumerInterface, 0),
 		natsJetStreamContext: nil,
+		circuitBreaker:       newCircuitBreaker(5, 15*time.Second),
 	}
 }
 
@@ -101,12 +103,12 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	}
 
 	if e.enablePublishers {
-		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
+		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.circuitBreaker)
 	}
 
 	var err error
 	if e.enableConsumers {
-		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
+		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.circuitBreaker)
 		if err != nil {
 			e.cleanup(5 * time.Minute)
 			e.logger.Error("Failed to start consumers", zap.Error(err))
@@ -122,6 +124,9 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 }
 
 func (e *Engine) Stop(ctx context.Context) error {
+	if e == nil {
+		return nil
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -187,11 +192,16 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 	if e.cancel != nil {
 		e.cancel()
 	}
-
+	// create a new context here as cleanup is usually called when the overlying context is cancelled
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 
-	// Clean up consumers
+	// Cleanup publishers first to stop message production
+	for _, publisher := range e.publishers {
+		publisher.Cleanup()
+	}
+
+	// Then cleanup consumers
 	for _, consumer := range e.consumers {
 		if err := consumer.Cleanup(); err != nil {
 			e.logger.Error("Consumer cleanup failed",
@@ -202,14 +212,22 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 		}
 	}
 
-	// Clean up streams if JetStream is enabled
 	if e.loadTestSpec != nil && e.loadTestSpec.UseJetStream && e.streamManager != nil {
 		if err := e.streamManager.CleanupStreams(cleanupCtx, e.loadTestSpec); err != nil {
-			e.logger.Error("Stream cleanup failed", zap.Error(err))
+			e.logger.Error("Stream cleanup failed - streams may remain in NATS",
+				zap.Error(err),
+				zap.String("test_name", e.loadTestSpec.Name))
+			e.statsCollector.RecordError(fmt.Errorf("stream cleanup failed: %w", err))
 		}
 	}
 
-	if e.natsConn != nil && e.natsConn.IsConnected() {
+	if e.natsConn != nil {
+		if e.natsConn.IsConnected() {
+			// Drain connection to allow pending messages to complete
+			if err := e.natsConn.Drain(); err != nil {
+				e.logger.Warn("Failed to drain NATS connection", zap.Error(err))
+			}
+		}
 		e.natsConn.Close()
 	}
 
@@ -217,6 +235,8 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 	e.natsConn = nil
 	e.loadTestSpec = nil
 	e.streamManager = nil
-	e.publishers = e.publishers[:0]
-	e.consumers = e.consumers[:0]
+	e.rampUpController = nil
+	e.errGroup = nil
+	e.publishers = nil
+	e.consumers = nil
 }

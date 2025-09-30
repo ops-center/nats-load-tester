@@ -10,7 +10,7 @@ NATS JetStream load testing tool for Kubernetes clusters.
 export VERSION=v4.2.0;
 export BINARY=yq_linux_amd64;
 wget https://github.com/mikefarah/yq/releases/download/${VERSION}/${BINARY}.tar.gz -O - |\tar xz;
-sudo mv ${BINARY} /usr/bin/yq
+sudo mv ${BINARY} /usr/bin/yq4
 ```
 
 ```bash
@@ -43,13 +43,9 @@ curl http://service-endpoint:9481/stats?limit=10
 
 ## Configuration
 
-### Environment Variable Support
-
 | Pattern | Replacement | Description |
 |---------|-------------|-------------|
 | `{}` | Stream number | Dynamic subject generation per stream |
-
-> **Note**: Full `${VAR}` environment variable expansion is not yet supported.
 
 ### Configuration Structure
 
@@ -75,7 +71,7 @@ curl http://service-endpoint:9481/stats?limit=10
 | `publishers` | `PublisherConfig` | ✓ | - | Message publisher configuration |
 | `consumers` | `ConsumerConfig` | ✓ | - | Message consumer configuration |
 | `behavior` | `BehaviorConfig` | ✓ | - | Test execution behavior |
-| `log_limits` | `LogLimits` | - | - | Logging constraints |
+| `log_limits` | `LogLimits` | - | `{"max_lines": 1000, "max_bytes": 1048576, "max_latency_samples": 10000}` | Logging and metrics constraints |
 
 #### StreamConfig
 
@@ -127,6 +123,14 @@ curl http://service-endpoint:9481/stats?limit=10
 |-------|------|----------|---------|-------------|
 | `duration_seconds` | `int64` | ✓ | - | Total test duration |
 | `ramp_up_seconds` | `int64` | ✓ | - | Gradual rate increase period |
+
+#### LogLimits
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `max_lines` | `int32` | - | `1000` | Maximum error log lines to retain |
+| `max_bytes` | `int64` | - | `1048576` | Maximum error log size in bytes |
+| `max_latency_samples` | `int32` | - | `10000` | Ring buffer size for latency tracking |
 
 #### Storage
 
@@ -184,6 +188,11 @@ curl http://service-endpoint:9481/stats?limit=10
     "behavior": {
       "duration_seconds": 300,
       "ramp_up_seconds": 30
+    },
+    "log_limits": {
+      "max_lines": 1000,
+      "max_bytes": 1048576,
+      "max_latency_samples": 5000
     }
   }],
   "storage": {
@@ -196,7 +205,8 @@ curl http://service-endpoint:9481/stats?limit=10
 ## TODO
 
 - [x] **CLI Operational Modes**: Add `--mode=publish|consume|both` CLI arguments for specialized pod roles
+- [x] **NATS API Migration**: Update from deprecated JetStream API to newer `github.com/nats-io/nats.go/jetstream`
+- [x] **Enhanced Latency Metrics**: Implemented P50, P90, P99 percentile tracking with configurable ring buffer size and optimized quickselect algorithm
 - [ ] **Synchronize the replicas and distribute the load-generation across each pod**
 - [ ] **Unified Service Endpoint**: Create master service that accepts single configuration and forwards to all replicated pods
-- [ ] **NATS API Migration**: Update from deprecated JetStream API to newer `github.com/nats-io/nats.go/jetstream`
-- [ ] **Enhanced Metrics System**: Implement comprehensive metrics collection including system resources (CPU, memory, goroutines), NATS-specific metrics (connection health, bytes in/out), JetStream performance (storage usage, cluster status), enhanced latency analysis (P50, P90, P95, P99.9, P99.99 percentiles), throughput trends, error categorization, and test progress tracking. Add Prometheus export, real-time WebSocket streaming, and comparative analysis capabilities for production-grade observability.
+- [ ] **Enhanced Metrics System**: Implement comprehensive metrics collection including system resources (CPU, memory, goroutines), NATS-specific metrics (connection health, bytes in/out), JetStream performance (storage usage, cluster status), throughput trends, error categorization, and test progress tracking. Add Prometheus export, real-time WebSocket streaming, and comparative analysis capabilities for production-grade observability.

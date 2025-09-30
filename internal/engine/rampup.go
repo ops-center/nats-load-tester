@@ -18,7 +18,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"go.opscenter.dev/nats-load-tester/internal/stats"
@@ -54,6 +53,7 @@ func (rum *RampUpManager) Start(ctx context.Context, publishers []PublisherInter
 	rampUpStart := time.Now()
 	rampUpTimer := time.NewTimer(duration)
 	rampUpTicker := time.NewTicker(time.Second)
+	defer rampUpTimer.Stop()
 
 	currentProgress := func() float64 {
 		// start at 1% minimum
@@ -88,14 +88,8 @@ func (rum *RampUpManager) Start(ctx context.Context, publishers []PublisherInter
 		case <-rampUpTicker.C:
 			progress := currentProgress()
 			remaining := remainingDuration()
-			rum.updatePublisherRates(publishers, progress, remaining)
+			rum.updatePublisherRates(publishers, progress)
 
-			currentRate := int32(0)
-			targetRate := int32(0)
-			for _, pub := range publishers {
-				targetRate += pub.GetTargetRate()
-				currentRate += pub.GetCurrentRate()
-			}
 			if rum.statsCollector != nil {
 				rum.statsCollector.SetRampUpStatus(true, progress*100.0, remaining)
 			}
@@ -112,16 +106,10 @@ func (rum *RampUpManager) setAllPublishersToFullRate(publishers []PublisherInter
 }
 
 // updatePublisherRates updates all publisher rates based on ramp-up progress
-func (rum *RampUpManager) updatePublisherRates(publishers []PublisherInterface, progress float64, remainingDuration time.Duration) {
+func (rum *RampUpManager) updatePublisherRates(publishers []PublisherInterface, progress float64) {
 	for _, pub := range publishers {
 		targetRate := pub.GetTargetRate()
 		currentRate := max(1, min(targetRate, int32(progress*float64(targetRate))))
 		pub.SetRate(currentRate)
 	}
-
-	rum.logger.Debug("Ramp-up progress",
-		zap.String("progress", fmt.Sprintf("%.2f%%", progress*100.0)),
-		zap.String("remaining_duration", remainingDuration.String()),
-		zap.Int("num_publishers", len(publishers)),
-	)
 }

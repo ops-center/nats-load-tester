@@ -110,7 +110,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				},
 			},
 			wantError: true,
-			errorMsg:  "publisher stream_name_prefix 'different_stream' must match consumer stream_name_prefix 'test_stream'",
+			errorMsg:  "publisher stream_name_prefix 'different_stream' does not match any stream name_prefix",
 		},
 		{
 			name: "consumer stream prefix mismatch",
@@ -151,7 +151,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 				},
 			},
 			wantError: true,
-			errorMsg:  "publisher stream_name_prefix 'test_stream' must match consumer stream_name_prefix 'different_stream'",
+			errorMsg:  "consumer stream_name_prefix 'different_stream' does not match any stream name_prefix",
 		},
 		{
 			name: "static subject format is valid",
