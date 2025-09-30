@@ -135,8 +135,9 @@ type BehaviorConfig struct {
 }
 
 type LogLimits struct {
-	MaxLines int32 `json:"max_lines"`
-	MaxBytes int64 `json:"max_bytes"`
+	MaxLines          int32 `json:"max_lines"`
+	MaxBytes          int64 `json:"max_bytes"`
+	MaxLatencySamples int32 `json:"max_latency_samples"`
 }
 
 type RepeatPolicy struct {
@@ -575,36 +576,32 @@ func (lts *LoadTestSpec) RampUpDuration() time.Duration {
 
 // ValidateStreamSynchronization ensures that stream configurations, publishers, and consumers are properly synchronized
 func (lts *LoadTestSpec) validateStreamSynchronization() error {
-	// For now, require publishers and consumers to use the same stream prefix
-	if lts.Publishers.StreamNamePrefix != lts.Consumers.StreamNamePrefix {
-		return fmt.Errorf("publisher stream_name_prefix '%s' must match consumer stream_name_prefix '%s'", lts.Publishers.StreamNamePrefix, lts.Consumers.StreamNamePrefix)
-	}
-
-	// Validate that publisher.StreamNamePrefix matches at least one stream name_prefix
-	publisherMatched := false
-
-	for _, stream := range lts.Streams {
-		if stream.NamePrefix == lts.Publishers.StreamNamePrefix {
-			publisherMatched = true
-			break
+	// Validate that publisher.StreamNamePrefix matches at least one stream name_prefix (if publishers are configured)
+	if lts.Publishers.CountPerStream > 0 {
+		publisherMatched := false
+		for _, stream := range lts.Streams {
+			if stream.NamePrefix == lts.Publishers.StreamNamePrefix {
+				publisherMatched = true
+				break
+			}
+		}
+		if !publisherMatched {
+			return fmt.Errorf("publisher stream_name_prefix '%s' does not match any stream name_prefix", lts.Publishers.StreamNamePrefix)
 		}
 	}
 
-	if !publisherMatched {
-		return fmt.Errorf("publisher stream_name_prefix '%s' does not match any stream name_prefix", lts.Publishers.StreamNamePrefix)
-	}
-
-	// Validate that consumer.StreamNamePrefix matches at least one stream name_prefix
-	consumerMatched := false
-	for _, stream := range lts.Streams {
-		if stream.NamePrefix == lts.Consumers.StreamNamePrefix {
-			consumerMatched = true
-			break
+	// Validate that consumer.StreamNamePrefix matches at least one stream name_prefix (if consumers are configured)
+	if lts.Consumers.CountPerStream > 0 {
+		consumerMatched := false
+		for _, stream := range lts.Streams {
+			if stream.NamePrefix == lts.Consumers.StreamNamePrefix {
+				consumerMatched = true
+				break
+			}
 		}
-	}
-
-	if !consumerMatched {
-		return fmt.Errorf("consumer stream_name_prefix '%s' does not match any stream name_prefix", lts.Consumers.StreamNamePrefix)
+		if !consumerMatched {
+			return fmt.Errorf("consumer stream_name_prefix '%s' does not match any stream name_prefix", lts.Consumers.StreamNamePrefix)
+		}
 	}
 
 	return nil

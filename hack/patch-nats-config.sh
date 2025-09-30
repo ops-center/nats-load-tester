@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Extract current nats.conf
-kubectl get cm -n ace ace-nats-config -oyaml | yq e '.data."nats.conf"' - > nats.conf.tmp
+kubectl get cm -n ace ace-nats-config -oyaml | yq4 e '.data."nats.conf"' - > nats.conf.tmp
 
 # Add cluster configuration
 cat << 'EOF' >> nats.conf.tmp

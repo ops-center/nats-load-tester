@@ -70,22 +70,26 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 			}
 
 			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5*time.Second, func() error {
-				err := sm.js.DeleteStream(ctx, streamName)
-				if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
-					return fmt.Errorf("failed to delete stream %s: %w", streamName, err)
+				_, err := sm.js.CreateOrUpdateStream(ctx, streamConfig)
+				if err == nil {
+					sm.logger.Info("Created or updated stream", zap.String("name", streamName))
+					return nil
 				}
-				sm.logger.Info("Deleted stream", zap.String("name", streamName))
-				return nil
-			}); err != nil {
-				return err
-			}
 
-			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5*time.Second, func() error {
-				_, err := sm.js.CreateStream(ctx, streamConfig)
-				if err != nil {
-					return fmt.Errorf("failed to create stream %s: %w", streamName, err)
+				sm.logger.Warn("CreateOrUpdateStream failed, attempting delete and recreate",
+					zap.String("name", streamName),
+					zap.Error(err))
+
+				if delErr := sm.js.DeleteStream(ctx, streamName); delErr != nil && !errors.Is(delErr, jetstream.ErrStreamNotFound) {
+					return fmt.Errorf("failed to delete stream %s: %w", streamName, delErr)
 				}
-				sm.logger.Info("Created stream", zap.String("name", streamName))
+
+				_, createErr := sm.js.CreateStream(ctx, streamConfig)
+				if createErr != nil {
+					return fmt.Errorf("failed to recreate stream %s: %w", streamName, createErr)
+				}
+
+				sm.logger.Info("Deleted and recreated stream", zap.String("name", streamName))
 				return nil
 			}); err != nil {
 				return err

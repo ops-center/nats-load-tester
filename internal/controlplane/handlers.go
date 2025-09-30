@@ -27,8 +27,16 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	MaxRequestBodySize    = 10 * 1024 * 1024
+	ConfigChannelTimeout  = 5 * time.Second
+	ServerShutdownTimeout = 5 * time.Second
+)
+
 func (h *HTTPServer) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
 	var cfg config.Config
+
+	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodySize)
 
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
@@ -62,7 +70,7 @@ func (h *HTTPServer) handleConfigUpdate(w http.ResponseWriter, r *http.Request) 
 
 	select {
 	case h.configSendChannel <- &cfg:
-	case <-time.After(5 * time.Second):
+	case <-time.After(ConfigChannelTimeout):
 		http.Error(w, "Server is busy processing another configuration", http.StatusServiceUnavailable)
 		h.logger.Warn("Configuration update rejected - server busy")
 		return

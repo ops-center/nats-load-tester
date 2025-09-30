@@ -122,6 +122,9 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 }
 
 func (e *Engine) Stop(ctx context.Context) error {
+	if e == nil {
+		return nil
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -187,11 +190,22 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 	if e.cancel != nil {
 		e.cancel()
 	}
-
+	// create a new context here as cleanup is usually called when the overlying context is cancelled
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 
-	// Clean up consumers
+	// Cleanup publishers first to stop message production
+	for _, publisher := range e.publishers {
+		if err := publisher.Cleanup(); err != nil {
+			e.logger.Error("Publisher cleanup failed",
+				zap.String("id", publisher.GetID()),
+				zap.String("stream", publisher.GetStreamName()),
+				zap.String("subject", publisher.GetSubject()),
+				zap.Error(err))
+		}
+	}
+
+	// Then cleanup consumers
 	for _, consumer := range e.consumers {
 		if err := consumer.Cleanup(); err != nil {
 			e.logger.Error("Consumer cleanup failed",
@@ -202,14 +216,22 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 		}
 	}
 
-	// Clean up streams if JetStream is enabled
 	if e.loadTestSpec != nil && e.loadTestSpec.UseJetStream && e.streamManager != nil {
 		if err := e.streamManager.CleanupStreams(cleanupCtx, e.loadTestSpec); err != nil {
-			e.logger.Error("Stream cleanup failed", zap.Error(err))
+			e.logger.Error("Stream cleanup failed - streams may remain in NATS",
+				zap.Error(err),
+				zap.String("test_name", e.loadTestSpec.Name))
+			e.statsCollector.RecordError(fmt.Errorf("stream cleanup failed: %w", err))
 		}
 	}
 
-	if e.natsConn != nil && e.natsConn.IsConnected() {
+	if e.natsConn != nil {
+		if e.natsConn.IsConnected() {
+			// Drain connection to allow pending messages to complete
+			if err := e.natsConn.Drain(); err != nil {
+				e.logger.Warn("Failed to drain NATS connection", zap.Error(err))
+			}
+		}
 		e.natsConn.Close()
 	}
 
@@ -217,6 +239,8 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 	e.natsConn = nil
 	e.loadTestSpec = nil
 	e.streamManager = nil
-	e.publishers = e.publishers[:0]
-	e.consumers = e.consumers[:0]
+	e.rampUpController = nil
+	e.errGroup = nil
+	e.publishers = nil
+	e.consumers = nil
 }

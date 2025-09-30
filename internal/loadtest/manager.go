@@ -18,7 +18,6 @@ package loadtest
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -86,7 +85,7 @@ func (m *manager) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *manager) Done() <-chan error {
+func (m *manager) DoneCh() <-chan error {
 	return m.doneCh
 }
 
@@ -231,13 +230,6 @@ func (m *manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 				zap.Int("iteration", repeatCount),
 				zap.String("name", lastLoadTest.Name),
 			)
-
-			currentConfig, err := json.Marshal(lastLoadTest)
-			if err != nil {
-				m.logger.Error("failed to marshal current config", zap.Error(err))
-			} else {
-				m.logger.Info("Current config: " + string(currentConfig))
-			}
 
 			done, err := processLoadTestSpec(lastLoadTest, "Repeat")
 			if done {

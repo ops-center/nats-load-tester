@@ -30,8 +30,10 @@ import (
 )
 
 const (
-	statsDataTTL   = 24 * time.Hour
-	failureDataTTL = 72 * time.Hour
+	DefaultBadgerGCIntervalMinutes = 5
+	BadgerGCDiscardRatio           = 0.5
+	statsDataTTL                   = 24 * time.Hour
+	failureDataTTL                 = 72 * time.Hour
 )
 
 type BadgerStorage struct {
@@ -65,15 +67,13 @@ func NewBadgerStorage(path string, logger *zap.Logger) (*BadgerStorage, error) {
 	}
 
 	go func() {
-		// TODO: make this configurable and/or smarter
-		// https://docs.hypermode.com/badger/quickstart#garbage-collection
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(DefaultBadgerGCIntervalMinutes * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 			again:
-				err := storage.db.RunValueLogGC(0.5)
+				err := storage.db.RunValueLogGC(BadgerGCDiscardRatio)
 				if err == nil {
 					goto again
 				}

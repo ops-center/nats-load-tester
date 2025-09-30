@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,6 +32,12 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+var messageBufferPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0)
+	},
+}
 
 type PublisherConfig struct {
 	ID               string
@@ -45,6 +52,7 @@ type PublisherConfig struct {
 }
 
 type Publisher struct {
+	mu            sync.Mutex
 	nc            *nats.Conn
 	js            jetstream.JetStream
 	config        PublisherConfig
@@ -53,6 +61,7 @@ type Publisher struct {
 	messageData   []byte
 	currentRate   atomic.Int32
 	targetRate    int32
+	stopped       bool
 }
 
 type statsCollector interface {
@@ -100,6 +109,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 	}
 
 	ticker := time.NewTicker(initialInterval)
+	defer ticker.Stop()
 
 	lastRate := p.GetCurrentRate()
 
@@ -113,9 +123,19 @@ func (p *Publisher) Start(ctx context.Context) error {
 			switch p.config.PublishPattern {
 			case config.PublishPatternSteady, config.PublishPatternRandom:
 				for range p.config.PublishBurstSize {
-					if err := p.publishMessage(ctx); err != nil && !errors.Is(err, nats.ErrTimeout) && !errors.Is(err, nats.ErrConnectionClosed) {
-						p.logger.Error("failed to publish", zap.Error(err))
+					if err := p.publishMessage(ctx); err != nil {
+						if errors.Is(err, nats.ErrTimeout) {
+							p.logger.Warn("publish timeout - NATS may be overloaded", zap.String("id", p.config.ID))
+						} else if errors.Is(err, nats.ErrConnectionClosed) {
+							p.logger.Warn("publish failed - connection closed", zap.String("id", p.config.ID))
+						} else if errors.Is(err, nats.ErrSlowConsumer) {
+							p.logger.Warn("slow consumer detected - NATS backpressure", zap.String("id", p.config.ID))
+						} else {
+							p.logger.Error("failed to publish", zap.Error(err))
+						}
 						p.statsRecorder.RecordPublishError(err)
+					} else {
+						p.statsRecorder.RecordPublish()
 					}
 				}
 
@@ -150,15 +170,22 @@ func (p *Publisher) calculatePublishInterval(currentRate int32) (time.Duration, 
 	case config.PublishPatternSteady:
 		return time.Second / time.Duration(currentRate), nil
 	case config.PublishPatternRandom:
-		randomFactor := time.Duration(rand.Intn(1000)+500) * time.Millisecond
-		return randomFactor / time.Duration(currentRate), nil
+		baseInterval := time.Second / time.Duration(currentRate)
+		jitterPercent := rand.Intn(100) - 50
+		jitter := baseInterval * time.Duration(jitterPercent) / 100
+		return baseInterval + jitter, nil
 	default:
 		return 0, fmt.Errorf("unknown publish pattern: %s", p.config.PublishPattern)
 	}
 }
 
 func (p *Publisher) publishMessage(ctx context.Context) error {
-	message := make([]byte, len(p.messageData))
+	// Get buffer from pool
+	buf := messageBufferPool.Get().([]byte)
+	if cap(buf) < len(p.messageData) {
+		buf = make([]byte, len(p.messageData))
+	}
+	message := buf[:len(p.messageData)]
 	copy(message, p.messageData)
 
 	if p.config.TrackLatency && len(message) >= 8 {
@@ -173,11 +200,12 @@ func (p *Publisher) publishMessage(ctx context.Context) error {
 		err = p.nc.Publish(p.config.Subject, message)
 	}
 
+	messageBufferPool.Put(buf[:0])
+
 	if err != nil {
 		return fmt.Errorf("publish failed: %w", err)
 	}
 
-	p.statsRecorder.RecordPublish()
 	return nil
 }
 
@@ -213,6 +241,22 @@ func (p *Publisher) GetSubject() string {
 	return p.config.Subject
 }
 
+// Cleanup releases all resources held by the publisher
+func (p *Publisher) Cleanup() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.stopped {
+		return nil
+	}
+	p.stopped = true
+
+	p.messageData = nil
+	p.currentRate.Store(0)
+
+	return nil
+}
+
 // CreatePublishers creates and starts publishers based on the load test spec and stream configurations
 func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) []PublisherInterface {
 	publishers := make([]PublisherInterface, 0)
@@ -245,6 +289,7 @@ func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 					publishers = append(publishers, publisher)
 
 					eg.Go(func() error {
+						defer publisher.Cleanup()
 						if err := publisher.Start(ctx); err != nil {
 							logger.Error("Publisher failed",
 								zap.String("id", publisher.GetID()),

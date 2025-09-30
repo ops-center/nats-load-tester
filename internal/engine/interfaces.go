@@ -26,6 +26,7 @@ import (
 // PublisherInterface defines the interface for message publishers
 type PublisherInterface interface {
 	Start(ctx context.Context) error
+	Cleanup() error
 	GetTargetRate() int32
 	GetCurrentRate() int32
 	SetRate(rate int32)
