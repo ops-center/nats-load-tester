@@ -89,7 +89,7 @@ curl http://service-endpoint:9481/stats?limit=10
 | `retention` | `string` | - | `"limits"` | Retention: `limits`, `interest`, `workqueue` |
 | `max_age` | `string` | - | `"1m"` | Message TTL (e.g., `5m`, `2h30m`, `24h`) |
 | `storage` | `string` | - | `"memory"` | Storage: `memory`, `file` |
-| `discard_new_per_subject` | `*bool` | - | `true` | Discard new messages per subject at limits |
+| `discard_new_per_subject` | `*bool` | - | `false` | Discard new messages per subject at limits |
 | `discard` | `string` | - | `"old"` | Discard policy: `old`, `new` |
 | `max_msgs` | `*int64` | - | `-1` | Max message count (-1 = unlimited) |
 | `max_bytes` | `*int64` | - | `-1` | Max storage bytes (-1 = unlimited) |

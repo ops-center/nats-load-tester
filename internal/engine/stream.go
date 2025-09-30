@@ -80,7 +80,7 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 				return err
 			}
 
-			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5, func() error {
+			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5*time.Second, func() error {
 				_, err := sm.js.CreateStream(ctx, streamConfig)
 				if err != nil {
 					return fmt.Errorf("failed to create stream %s: %w", streamName, err)

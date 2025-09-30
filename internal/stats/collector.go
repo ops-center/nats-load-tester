@@ -96,6 +96,9 @@ func (c *Collector) SetConfig(loadTestSpec *config.LoadTestSpec) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if loadTestSpec == nil {
+		return fmt.Errorf("load test spec is nil")
+	}
 	c.currentLoadTestSpecHash = loadTestSpec.Hash()
 	c.loadTestSpec = loadTestSpec
 
@@ -150,6 +153,10 @@ func (c *Collector) RecordError(err error) {
 func (c *Collector) recordError(err error) {
 	c.errorsMu.Lock()
 	defer c.errorsMu.Unlock()
+
+	if c.loadTestSpec == nil {
+		panic("loadTestSpec is nil - SetConfig must be called before recording errors")
+	}
 
 	if len(c.errors) >= int(c.loadTestSpec.LogLimits.MaxLines) {
 		c.errors = c.errors[1:]

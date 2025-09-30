@@ -18,6 +18,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -25,14 +26,18 @@ import (
 // a simplified and modified knockoff of 'ExponentialBackoff' from k8s.io/apimachinery/pkg/util/wait.
 // retries fn() until it returns a nil error, or the max number of steps is reached
 func exponentialBackoff(ctx context.Context, duration time.Duration, factor float64, steps int, cap time.Duration, fn func() error) error {
+	var paramErrs []error
 	if steps <= 0 {
-		return fmt.Errorf("attempts cannot be negative")
+		paramErrs = append(paramErrs, fmt.Errorf("steps must be greater than zero"))
 	}
 	if duration <= 0 {
-		return fmt.Errorf("duration must be greater than zero")
+		paramErrs = append(paramErrs, fmt.Errorf("duration must be greater than zero"))
 	}
 	if factor <= 0 {
-		return fmt.Errorf("factor must be greater than zero")
+		paramErrs = append(paramErrs, fmt.Errorf("factor must be greater than zero"))
+	}
+	if len(paramErrs) > 0 {
+		return errors.Join(paramErrs...)
 	}
 
 	currentDuration := duration

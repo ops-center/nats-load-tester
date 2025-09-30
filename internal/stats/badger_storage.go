@@ -87,6 +87,9 @@ func NewBadgerStorage(path string, logger *zap.Logger) (*BadgerStorage, error) {
 }
 
 func (b *BadgerStorage) WriteStats(loadTestSpec *config.LoadTestSpec, stats Stats) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	hash := loadTestSpec.Hash()
 	key := fmt.Sprintf("stats:%s:%d", hash, stats.Timestamp.UnixMilli())
 	value, err := json.Marshal(stats)
@@ -104,6 +107,9 @@ func (b *BadgerStorage) WriteStats(loadTestSpec *config.LoadTestSpec, stats Stat
 }
 
 func (b *BadgerStorage) WriteFailure(loadTestSpec *config.LoadTestSpec, stats Stats) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	hash := loadTestSpec.Hash()
 	key := fmt.Sprintf("failure:%s:%d", hash, stats.Timestamp.UnixMilli())
 	value, err := json.Marshal(stats)
@@ -137,10 +143,15 @@ func (b *BadgerStorage) Close() error {
 
 // NOTE: NOT SAFE FROM CONCURRENT READS
 func (b *BadgerStorage) Clear() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.db.DropAll()
 }
 
 func (b *BadgerStorage) GetStats(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	var stats []StatsEntry
 	hash := loadTestSpec.Hash()
 
@@ -205,6 +216,9 @@ func (b *BadgerStorage) GetStats(loadTestSpec *config.LoadTestSpec, limit int, s
 }
 
 func (b *BadgerStorage) GetFailures(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	var failures []StatsEntry
 	hash := loadTestSpec.Hash()
 
