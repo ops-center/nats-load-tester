@@ -97,15 +97,21 @@ func run(args *cliArgs) error {
 		}
 	}
 
-	go func() {
-		if err := manager.Start(ctx); err != nil {
-			logger.Error("manager failed", zap.Error(err))
-		}
-	}()
+	if err := manager.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start manager: %w", err)
+	}
 
-	<-sigCh
-	logger.Info("Shutting down...")
-	cancel()
+	var mgrDoneErr error
+	mgrDoneCh := manager.Done()
 
-	return nil
+	select {
+	case <-sigCh:
+		logger.Info("Shutting down...")
+		cancel()
+		mgrDoneErr = <-mgrDoneCh
+	case err := <-mgrDoneCh:
+		mgrDoneErr = err
+	}
+
+	return mgrDoneErr
 }

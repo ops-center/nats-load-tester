@@ -102,9 +102,9 @@ func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
 		consumerConfig.DeliverSubject = fmt.Sprintf("_INBOX.%s", c.config.DurableName)
 		pushConsumer, err := c.js.CreateOrUpdatePushConsumer(ctx, c.config.StreamName, consumerConfig)
 		if err != nil {
-			return fmt.Errorf("failed to create consumer: %w", err)
+			return fmt.Errorf("failed to create push consumer: %w", err)
 		}
-		consumeContext, err := pushConsumer.Consume(c.handleMessage)
+		consumeContext, err := pushConsumer.Consume(c.handleNatsJetstreamMessage)
 		if err != nil {
 			return fmt.Errorf("failed to start push consumer: %w", err)
 		}
@@ -114,9 +114,9 @@ func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
 	case config.ConsumerTypePull:
 		pullConsumer, err := c.js.CreateOrUpdateConsumer(ctx, c.config.StreamName, consumerConfig)
 		if err != nil {
-			return fmt.Errorf("failed to create consumer: %w", err)
+			return fmt.Errorf("failed to create pull consumer: %w", err)
 		}
-		consumeContext, err := pullConsumer.Consume(c.handleMessage)
+		consumeContext, err := pullConsumer.Consume(c.handleNatsJetstreamMessage)
 		if err != nil {
 			return fmt.Errorf("failed to start pull consumer: %w", err)
 		}
@@ -130,7 +130,7 @@ func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
 
 func (c *Consumer) startCoreConsumer() error {
 	msgHandler := func(msg *nats.Msg) {
-		c.handleNatsMessage(msg)
+		c.handleNatsCoreMessage(msg)
 	}
 
 	sub, err := c.nc.Subscribe(c.config.Subject, msgHandler)
@@ -142,21 +142,22 @@ func (c *Consumer) startCoreConsumer() error {
 	return nil
 }
 
-func (c *Consumer) handleNatsMessage(msg *nats.Msg) {
-	if c.config.ConsumeDelayMs > 0 {
-		time.Sleep(time.Duration(c.config.ConsumeDelayMs) * time.Millisecond)
-	}
+func (c *Consumer) handleNatsCoreMessage(msg *nats.Msg) {
+	c.processMessage(msg.Data)
+	c.statsCollector.RecordConsume()
+}
 
-	// Only attempt to read timestamp if latency tracking is enabled and message is long enough
-	if c.config.TrackLatency && len(msg.Data) >= 8 {
-		timestamp := binary.LittleEndian.Uint64(msg.Data[:8])
-		latency := time.Since(time.Unix(0, int64(timestamp)))
-		c.statsCollector.RecordLatency(latency)
-	}
+func (c *Consumer) handleNatsJetstreamMessage(msg jetstream.Msg) {
+	c.processMessage(msg.Data())
 
-	if c.config.UseJetStream && c.config.AckPolicy != "none" {
-		if err := msg.Ack(); err != nil {
-			c.logger.Error("Failed to ack message", zap.Error(err))
+	if c.config.AckPolicy != "none" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := exponentialBackoff(ctx, 100*time.Millisecond, 2.0, 4, 500*time.Millisecond, func() error {
+			return msg.Ack()
+		}); err != nil {
+			c.logger.Error("Failed to ack message after retries", zap.Error(err))
 			c.statsCollector.RecordConsumeError(err)
 			return
 		}
@@ -165,28 +166,16 @@ func (c *Consumer) handleNatsMessage(msg *nats.Msg) {
 	c.statsCollector.RecordConsume()
 }
 
-func (c *Consumer) handleMessage(msg jetstream.Msg) {
+func (c *Consumer) processMessage(data []byte) {
 	if c.config.ConsumeDelayMs > 0 {
 		time.Sleep(time.Duration(c.config.ConsumeDelayMs) * time.Millisecond)
 	}
 
-	msgData := msg.Data()
-	// Only attempt to read timestamp if latency tracking is enabled and message is long enough
-	if c.config.TrackLatency && len(msgData) >= 8 {
-		timestamp := binary.LittleEndian.Uint64(msgData[:8])
+	if c.config.TrackLatency && len(data) >= 8 {
+		timestamp := binary.LittleEndian.Uint64(data[:8])
 		latency := time.Since(time.Unix(0, int64(timestamp)))
 		c.statsCollector.RecordLatency(latency)
 	}
-
-	if c.config.AckPolicy != "none" {
-		if err := msg.Ack(); err != nil {
-			c.logger.Error("Failed to ack message", zap.Error(err))
-			c.statsCollector.RecordConsumeError(err)
-			return
-		}
-	}
-
-	c.statsCollector.RecordConsume()
 }
 
 func (c *Consumer) Cleanup() error {
@@ -225,7 +214,7 @@ func (c *Consumer) GetSubject() string {
 // CreateConsumers creates and starts consumers based on the load test spec and stream configurations
 func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamConsumerManager, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) ([]ConsumerInterface, error) {
 	consumers := make([]ConsumerInterface, 0)
-	consumerStartErrGroup := &errgroup.Group{}
+	consumerStartErrGroup, consumerCtx := errgroup.WithContext(ctx)
 
 	for _, streamSpec := range loadTestSpec.Streams {
 		// Only create consumers for streams that match the consumer's stream name prefix
@@ -257,8 +246,8 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 					consumers = append(consumers, consumer)
 
 					consumerStartErrGroup.Go(func() error {
-						if err := exponentialBackoff(ctx, 1*time.Second, 2, 5, 5*time.Second, func() error {
-							return consumer.Start(ctx)
+						if err := exponentialBackoff(consumerCtx, 1*time.Second, 2, 5, 5*time.Second, func() error {
+							return consumer.Start(consumerCtx)
 						}); err != nil {
 							statsCollector.RecordError(err)
 							logger.Error("consumer failed",
@@ -275,7 +264,7 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 							zap.String("subject", consumer.GetSubject()))
 
 						eg.Go(func() error {
-							<-ctx.Done()
+							<-consumerCtx.Done()
 							if consumerErr := consumer.Cleanup(); consumerErr != nil {
 								logger.Error("consumer cleanup failed",
 									zap.String("id", consumer.GetID()),

@@ -95,7 +95,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	if loadTestSpec.UseJetStream {
 		if err := e.streamManager.SetupStreams(engineCtx, loadTestSpec); err != nil {
 			e.logger.Error("Failed to setup streams", zap.Error(err))
-			e.cleanup(30 * time.Second)
+			e.cleanup(5 * time.Minute)
 			return fmt.Errorf("failed to setup streams: %w", err)
 		}
 	}
@@ -108,7 +108,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	if e.enableConsumers {
 		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
 		if err != nil {
-			e.cleanup(30 * time.Second)
+			e.cleanup(5 * time.Minute)
 			e.logger.Error("Failed to start consumers", zap.Error(err))
 			return fmt.Errorf("failed to start consumers: %w", err)
 		}
@@ -136,7 +136,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 		err = e.errGroup.Wait()
 	}
 
-	e.cleanup(30 * time.Second)
+	e.cleanup(5 * time.Minute)
 
 	return err
 }
