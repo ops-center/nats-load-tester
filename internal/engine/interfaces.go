@@ -27,9 +27,9 @@ import (
 type PublisherInterface interface {
 	Start(ctx context.Context) error
 	Cleanup()
-	GetTargetRate() int32
-	GetCurrentRate() int32
-	SetRate(rate int32)
+	GetTargetRate() int64
+	GetCurrentRate() int64
+	SetRate(rate int64)
 	GetID() string
 	GetStreamName() string
 	GetSubject() string

@@ -231,6 +231,7 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 		e.natsConn.Close()
 	}
 
+	e.circuitBreaker.reset()
 	e.natsJetStreamContext = nil
 	e.natsConn = nil
 	e.loadTestSpec = nil
