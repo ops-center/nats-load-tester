@@ -48,6 +48,8 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 		return fmt.Errorf("context is nil")
 	}
 
+	streamCount := 0
+
 	for _, streamSpec := range loadTestSpec.Streams {
 		streamNames := streamSpec.GetFormattedStreamNames()
 		for streamIndex, streamName := range streamNames {
@@ -72,13 +74,8 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5*time.Second, func() error {
 				_, err := sm.js.CreateOrUpdateStream(ctx, streamConfig)
 				if err == nil {
-					sm.logger.Info("Created or updated stream", zap.String("name", streamName))
 					return nil
 				}
-
-				sm.logger.Warn("CreateOrUpdateStream failed, attempting delete and recreate",
-					zap.String("name", streamName),
-					zap.Error(err))
 
 				if delErr := sm.js.DeleteStream(ctx, streamName); delErr != nil && !errors.Is(delErr, jetstream.ErrStreamNotFound) {
 					return fmt.Errorf("failed to delete stream %s: %w", streamName, delErr)
@@ -89,13 +86,16 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 					return fmt.Errorf("failed to recreate stream %s: %w", streamName, createErr)
 				}
 
-				sm.logger.Info("Deleted and recreated stream", zap.String("name", streamName))
 				return nil
-			}); err != nil {
+			}); err != nil { // dont ignore context cancellation/timeout errs here
 				return err
 			}
+
+			streamCount++
 		}
 	}
+
+	sm.logger.Info("Setup streams completed", zap.Int("total_streams", streamCount))
 
 	return nil
 }
@@ -105,11 +105,8 @@ func (sm *StreamManager) CleanupStreams(cleanupCtx context.Context, loadTestSpec
 	for _, streamSpec := range loadTestSpec.Streams {
 		streamNames := streamSpec.GetFormattedStreamNames()
 		for _, streamName := range streamNames {
-			err := sm.js.DeleteStream(cleanupCtx, streamName)
-			if err != nil && err != jetstream.ErrStreamNotFound {
-				sm.logger.Warn("Failed to delete stream", zap.String("name", streamName), zap.Error(err))
-			} else if err == nil {
-				sm.logger.Info("Deleted stream", zap.String("name", streamName))
+			if err := sm.js.DeleteStream(cleanupCtx, streamName); err != nil && err != jetstream.ErrStreamNotFound {
+				return err
 			}
 		}
 	}

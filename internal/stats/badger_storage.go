@@ -87,6 +87,7 @@ func NewBadgerStorage(path string, logger *zap.Logger) (*BadgerStorage, error) {
 }
 
 func (b *BadgerStorage) WriteStats(loadTestSpec *config.LoadTestSpec, stats Stats) error {
+	// Using RLock just to guard against Close()/Clear() being called while read/write
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 

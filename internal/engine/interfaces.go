@@ -54,3 +54,14 @@ type StreamManagerInterface interface {
 type RampUpControllerInterface interface {
 	Start(ctx context.Context, publishers []PublisherInterface, duration time.Duration) error
 }
+
+type statsCollector interface {
+	RecordPublish()
+	RecordPublisherStopped()
+	RecordPublishError(error)
+	RecordConsume()
+	RecordConsumerStopped()
+	RecordConsumeError(error)
+	RecordLatency(time.Duration)
+	RecordError(error)
+}

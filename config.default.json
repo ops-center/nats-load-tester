@@ -43,7 +43,8 @@
         "ack_wait_seconds": 5,
         "max_ack_pending": 1000,
         "consume_delay_ms": 50,
-        "ack_policy": "explicit"
+        "ack_policy": "explicit",
+        "pull_max_messages": 100
       },
       "behavior": {
         "duration_seconds": 300,

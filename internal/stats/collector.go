@@ -29,19 +29,21 @@ import (
 )
 
 type Collector struct {
-	mu            sync.RWMutex
-	logger        *zap.Logger
-	loadTestSpec  *config.LoadTestSpec
-	storage       Storage
-	published     atomic.Uint64
-	consumed      atomic.Uint64
-	publishErrors atomic.Uint64
-	consumeErrors atomic.Uint64
-	latencies     []time.Duration
-	latencyIndex  int
-	errors        []error
-	startTime     time.Time
-	lastStatsTime time.Time
+	mu               sync.RWMutex
+	logger           *zap.Logger
+	loadTestSpec     *config.LoadTestSpec
+	storage          Storage
+	published        atomic.Uint64
+	consumed         atomic.Uint64
+	consumerStopped  atomic.Uint64
+	publisherStopped atomic.Uint64
+	publishErrors    atomic.Uint64
+	consumeErrors    atomic.Uint64
+	latencies        []time.Duration
+	latencyIndex     int
+	errors           []error
+	startTime        time.Time
+	lastStatsTime    time.Time
 
 	currentLoadTestSpecHash string
 
@@ -55,17 +57,19 @@ type Collector struct {
 }
 
 type Stats struct {
-	Timestamp       time.Time
-	Published       uint64
-	Consumed        uint64
-	PublishRate     float64
-	ConsumeRate     float64
-	PublishErrors   uint64
-	ConsumeErrors   uint64
-	PendingMessages int64
-	Latency         LatencyStats
-	Errors          []error
-	RampUp          RampUpStats
+	Timestamp        time.Time
+	Published        uint64
+	PublisherStopped uint64
+	Consumed         uint64
+	ConsumerStopped  uint64
+	PublishRate      float64
+	ConsumeRate      float64
+	PublishErrors    uint64
+	ConsumeErrors    uint64
+	PendingMessages  int64
+	Latency          LatencyStats
+	Errors           []string
+	RampUp           RampUpStats
 }
 
 type RampUpStats struct {
@@ -112,6 +116,8 @@ func (c *Collector) SetConfig(loadTestSpec *config.LoadTestSpec) error {
 
 	c.published.Store(0)
 	c.consumed.Store(0)
+	c.consumerStopped.Store(0)
+	c.publisherStopped.Store(0)
 	c.publishErrors.Store(0)
 	c.consumeErrors.Store(0)
 	c.startTime = time.Now()
@@ -149,6 +155,14 @@ func (c *Collector) RecordPublishError(err error) {
 
 func (c *Collector) RecordConsume() {
 	c.consumed.Add(1)
+}
+
+func (c *Collector) RecordConsumerStopped() {
+	c.consumerStopped.Add(1)
+}
+
+func (c *Collector) RecordPublisherStopped() {
+	c.publisherStopped.Add(1)
 }
 
 func (c *Collector) RecordConsumeError(err error) {
@@ -224,11 +238,13 @@ func (c *Collector) CollectStats() *Stats {
 	duration := now.Sub(c.lastStatsTime).Seconds()
 
 	stats := Stats{
-		Timestamp:     now,
-		Published:     c.published.Load(),
-		Consumed:      c.consumed.Load(),
-		PublishErrors: c.publishErrors.Load(),
-		ConsumeErrors: c.consumeErrors.Load(),
+		Timestamp:        now,
+		Published:        c.published.Load(),
+		Consumed:         c.consumed.Load(),
+		PublisherStopped: c.publisherStopped.Load(),
+		ConsumerStopped:  c.consumerStopped.Load(),
+		PublishErrors:    c.publishErrors.Load(),
+		ConsumeErrors:    c.consumeErrors.Load(),
 	}
 
 	if duration > 0 {
@@ -256,8 +272,12 @@ func (c *Collector) CollectStats() *Stats {
 		c.latencyIndex = 0
 	}
 
-	stats.Errors = make([]error, len(c.errors))
-	copy(stats.Errors, c.errors)
+	stats.Errors = make([]string, len(c.errors))
+	for i, err := range c.errors {
+		if err != nil {
+			stats.Errors[i] = err.Error()
+		}
+	}
 	c.errors = nil
 
 	stats.RampUp = c.rampUpStats
@@ -409,7 +429,7 @@ func (c *Collector) WriteFailure(err error) {
 
 	failureStats := Stats{
 		Timestamp: time.Now(),
-		Errors:    []error{err},
+		Errors:    []string{err.Error()},
 	}
 
 	// Write failure directly to storage (no in-memory cache)
@@ -457,6 +477,8 @@ func (c *Collector) Cleanup() error {
 	// Reset counters
 	c.published.Store(0)
 	c.consumed.Store(0)
+	c.consumerStopped.Store(0)
+	c.publisherStopped.Store(0)
 	c.publishErrors.Store(0)
 	c.consumeErrors.Store(0)
 

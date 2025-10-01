@@ -109,8 +109,8 @@ func TestNATSStreamConfigurationIntegration(t *testing.T) {
 		}
 	}()
 
-	t.Log("Waiting for publishers to generate messages...")
-	time.Sleep(5 * time.Second)
+	t.Log("Waiting for publishers to ramp up and generate messages...")
+	time.Sleep(12 * time.Second)
 
 	t.Log("Verifying stream configuration...")
 	err = verifyStreamConfiguration(t, natsURL, loadTestSpec)
@@ -187,7 +187,6 @@ func createTestLoadTestSpec(natsURL string) *config.LoadTestSpec {
 	// Helper function to get pointer values for optional fields
 	boolPtr := func(b bool) *bool { return &b }
 	int64Ptr := func(i int64) *int64 { return &i }
-	intPtr := func(i int) *int { return &i }
 
 	return &config.LoadTestSpec{
 		Name:           "integration-test",
@@ -209,8 +208,8 @@ func createTestLoadTestSpec(natsURL string) *config.LoadTestSpec {
 				Discard:              "old",
 				MaxMsgs:              int64Ptr(1000),
 				MaxBytes:             int64Ptr(1048576), // 1MB
-				MaxMsgsPerSubject:    int64Ptr(500),
-				MaxConsumers:         intPtr(10),
+				MaxMsgsPerSubject:    500,
+				MaxConsumers:         10,
 			},
 		},
 		Publishers: config.PublisherConfig{
