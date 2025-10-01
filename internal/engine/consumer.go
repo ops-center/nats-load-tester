@@ -58,12 +58,13 @@ type ConsumerConfig struct {
 }
 
 type Consumer struct {
-	mu                      sync.Mutex
-	nc                      *nats.Conn
-	js                      jetstream.StreamConsumerManager
-	config                  ConsumerConfig
-	statsCollector          statsCollector
-	logger                  *zap.Logger
+	mu             sync.Mutex
+	nc             *nats.Conn
+	js             jetstream.StreamConsumerManager
+	config         ConsumerConfig
+	statsCollector statsCollector
+	logger         *zap.Logger
+
 	subscription            *nats.Subscription
 	jetstreamConsumeContext jetstream.ConsumeContext
 	stopped                 bool
@@ -234,6 +235,15 @@ func (c *Consumer) Cleanup() error {
 		c.jetstreamConsumeContext = nil
 	}
 
+	if c.config.UseJetStream && c.js != nil && c.config.DurableName != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := c.js.DeleteConsumer(ctx, c.config.StreamName, c.config.DurableName); err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) {
+			errs = append(errs, fmt.Errorf("failed to delete consumer: %w", err))
+		}
+	}
+
 	c.nc = nil
 	c.js = nil
 	c.statsCollector = nil
@@ -290,16 +300,26 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 						TrackLatency:   loadTestSpec.Publishers.TrackLatency,
 					}
 
-					consumer := NewConsumer(nc, js, consCfg, statsCollector, logger)
-					consumers = append(consumers, consumer)
-
 					consumerStartErrGroup.Go(func() error {
+						var consumer ConsumerInterface
+
 						if err := exponentialBackoff(consumerCtx, ConsumerStartRetryDelaySeconds*time.Second, ConsumerStartRetryFactor, ConsumerStartMaxAttempts, ConsumerStartMaxDelaySeconds*time.Second, func() error {
-							return consumer.Start(consumerCtx)
+							consumer = NewConsumer(nc, js, consCfg, statsCollector, logger)
+							if startErr := consumer.Start(consumerCtx); startErr != nil {
+								logger.Warn("failed to start consumer, retrying", zap.String("id", consCfg.ID), zap.Error(startErr))
+								if err := consumer.Cleanup(); err != nil {
+									logger.Error("consumer cleanup failed after start error", zap.String("id", consCfg.ID), zap.Error(err))
+									return err
+								}
+								return startErr
+							}
+							return nil
 						}); err != nil {
 							statsCollector.RecordError(err)
 							return fmt.Errorf("consumer %s failed: %w", consumer.GetID(), err)
 						}
+
+						consumers = append(consumers, consumer)
 
 						logger.Info("consumer started",
 							zap.String("id", consumer.GetID()),

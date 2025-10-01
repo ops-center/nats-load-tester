@@ -543,23 +543,27 @@ func (p *PublisherMultipliers) Validate() error {
 }
 
 func (lts *LoadTestSpec) ApplyMultipliers(rp RepeatPolicy) {
-	for i := range lts.Streams {
-		lts.Streams[i].Count = int32(float64(lts.Streams[i].Count) * rp.Streams.CountMultiplier)
-		lts.Streams[i].Replicas = int32(float64(lts.Streams[i].Replicas) * rp.Streams.ReplicasMultiplier)
-		lts.Streams[i].MessagesPerStreamPerSecond = int64(float64(lts.Streams[i].MessagesPerStreamPerSecond) * rp.Streams.MessagesPerStreamPerSecondMultiplier)
+	original := *lts
+
+	lts.Streams = make([]StreamSpec, len(original.Streams))
+	for i := range original.Streams {
+		lts.Streams[i] = original.Streams[i]
+		lts.Streams[i].Count = int32(float64(original.Streams[i].Count) * rp.Streams.CountMultiplier)
+		lts.Streams[i].Replicas = int32(float64(original.Streams[i].Replicas) * rp.Streams.ReplicasMultiplier)
+		lts.Streams[i].MessagesPerStreamPerSecond = int64(float64(original.Streams[i].MessagesPerStreamPerSecond) * rp.Streams.MessagesPerStreamPerSecondMultiplier)
 	}
 
-	lts.Behavior.DurationSeconds = int64(float64(lts.Behavior.DurationSeconds) * rp.Behavior.DurationMultiplier)
-	lts.Behavior.RampUpSeconds = int64(float64(lts.Behavior.RampUpSeconds) * rp.Behavior.RampUpMultiplier)
+	lts.Behavior.DurationSeconds = int64(float64(original.Behavior.DurationSeconds) * rp.Behavior.DurationMultiplier)
+	lts.Behavior.RampUpSeconds = int64(float64(original.Behavior.RampUpSeconds) * rp.Behavior.RampUpMultiplier)
 
-	lts.Consumers.AckWaitSeconds = int64(float64(lts.Consumers.AckWaitSeconds) * rp.Consumers.AckWaitMultiplier)
-	lts.Consumers.MaxAckPending = int32(float64(lts.Consumers.MaxAckPending) * rp.Consumers.MaxAckPendingMultiplier)
-	lts.Consumers.ConsumeDelayMs = int64(float64(lts.Consumers.ConsumeDelayMs) * rp.Consumers.ConsumeDelayMultiplier)
-	lts.Consumers.CountPerStream = int32(float64(lts.Consumers.CountPerStream) * rp.Consumers.CountPerStreamMultiplier)
+	lts.Consumers.AckWaitSeconds = int64(float64(original.Consumers.AckWaitSeconds) * rp.Consumers.AckWaitMultiplier)
+	lts.Consumers.MaxAckPending = int32(float64(original.Consumers.MaxAckPending) * rp.Consumers.MaxAckPendingMultiplier)
+	lts.Consumers.ConsumeDelayMs = int64(float64(original.Consumers.ConsumeDelayMs) * rp.Consumers.ConsumeDelayMultiplier)
+	lts.Consumers.CountPerStream = int32(float64(original.Consumers.CountPerStream) * rp.Consumers.CountPerStreamMultiplier)
 
-	lts.Publishers.CountPerStream = int32(float64(lts.Publishers.CountPerStream) * rp.Publishers.CountPerStreamMultiplier)
-	lts.Publishers.PublishRatePerSecond = int32(float64(lts.Publishers.PublishRatePerSecond) * rp.Publishers.PublishRateMultiplier)
-	lts.Publishers.MessageSizeBytes = int32(float64(lts.Publishers.MessageSizeBytes) * rp.Publishers.MessageSizeBytesMultiplier)
+	lts.Publishers.CountPerStream = int32(float64(original.Publishers.CountPerStream) * rp.Publishers.CountPerStreamMultiplier)
+	lts.Publishers.PublishRatePerSecond = int32(float64(original.Publishers.PublishRatePerSecond) * rp.Publishers.PublishRateMultiplier)
+	lts.Publishers.MessageSizeBytes = int32(float64(original.Publishers.MessageSizeBytes) * rp.Publishers.MessageSizeBytesMultiplier)
 }
 
 func (c *Config) StatsInterval() time.Duration {

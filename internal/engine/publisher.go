@@ -33,12 +33,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var messageBufferPool = sync.Pool{
-	New: func() any {
-		return make([]byte, 0)
-	},
-}
-
 type PublisherConfig struct {
 	ID               string
 	StreamName       string
@@ -179,9 +173,16 @@ func (p *Publisher) calculatePublishInterval(currentRate int32) (time.Duration, 
 	}
 }
 
+var messageBufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0)
+		return &b
+	},
+}
+
 func (p *Publisher) publishMessage(ctx context.Context) error {
-	// Get buffer from pool
-	buf := messageBufferPool.Get().([]byte)
+	bufPtr := messageBufferPool.Get().(*[]byte)
+	buf := *bufPtr
 	if cap(buf) < len(p.messageData) {
 		buf = make([]byte, len(p.messageData))
 	}
@@ -200,7 +201,8 @@ func (p *Publisher) publishMessage(ctx context.Context) error {
 		err = p.nc.Publish(p.config.Subject, message)
 	}
 
-	messageBufferPool.Put(buf[:0])
+	*bufPtr = buf[:0]
+	messageBufferPool.Put(bufPtr)
 
 	if err != nil {
 		return fmt.Errorf("publish failed: %w", err)
@@ -242,19 +244,17 @@ func (p *Publisher) GetSubject() string {
 }
 
 // Cleanup releases all resources held by the publisher
-func (p *Publisher) Cleanup() error {
+func (p *Publisher) Cleanup() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.stopped {
-		return nil
+		return
 	}
 	p.stopped = true
 
 	p.messageData = nil
 	p.currentRate.Store(0)
-
-	return nil
 }
 
 // CreatePublishers creates and starts publishers based on the load test spec and stream configurations

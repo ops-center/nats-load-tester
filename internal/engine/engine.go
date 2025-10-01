@@ -196,13 +196,7 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 
 	// Cleanup publishers first to stop message production
 	for _, publisher := range e.publishers {
-		if err := publisher.Cleanup(); err != nil {
-			e.logger.Error("Publisher cleanup failed",
-				zap.String("id", publisher.GetID()),
-				zap.String("stream", publisher.GetStreamName()),
-				zap.String("subject", publisher.GetSubject()),
-				zap.Error(err))
-		}
+		publisher.Cleanup()
 	}
 
 	// Then cleanup consumers
