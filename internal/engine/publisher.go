@@ -46,16 +46,17 @@ type PublisherConfig struct {
 }
 
 type Publisher struct {
-	mu            sync.Mutex
-	nc            *nats.Conn
-	js            jetstream.JetStream
-	config        PublisherConfig
-	statsRecorder statsCollector
-	logger        *zap.Logger
-	messageData   []byte
-	currentRate   atomic.Int32
-	targetRate    int32
-	stopped       bool
+	mu             sync.Mutex
+	nc             *nats.Conn
+	js             jetstream.JetStream
+	config         PublisherConfig
+	statsRecorder  statsCollector
+	logger         *zap.Logger
+	messageData    []byte
+	currentRate    atomic.Int32
+	targetRate     int32
+	stopped        bool
+	circuitBreaker circuitBreaker
 }
 
 type statsCollector interface {
@@ -67,7 +68,7 @@ type statsCollector interface {
 	RecordError(error)
 }
 
-func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, statsCollector statsCollector, logger *zap.Logger) PublisherInterface {
+func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, statsCollector statsCollector, logger *zap.Logger, cb circuitBreaker) PublisherInterface {
 	messageData := make([]byte, cfg.MessageSize)
 	if cfg.MessageSize > 8 {
 		for i := int32(8); i < cfg.MessageSize; i++ {
@@ -76,23 +77,19 @@ func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, st
 	}
 
 	return &Publisher{
-		nc:            nc,
-		js:            js,
-		config:        cfg,
-		statsRecorder: statsCollector,
-		logger:        logger,
-		messageData:   messageData,
-		currentRate:   atomic.Int32{},
-		targetRate:    cfg.PublishRate,
+		nc:             nc,
+		js:             js,
+		config:         cfg,
+		statsRecorder:  statsCollector,
+		logger:         logger,
+		messageData:    messageData,
+		currentRate:    atomic.Int32{},
+		targetRate:     cfg.PublishRate,
+		circuitBreaker: cb,
 	}
 }
 
 func (p *Publisher) Start(ctx context.Context) error {
-	p.logger.Info("Starting publisher",
-		zap.String("id", p.config.ID),
-		zap.String("subject", p.config.Subject),
-	)
-
 	// Start with a rate of 1/s, will be updated during ramp-up
 	p.currentRate.Store(1)
 
@@ -117,7 +114,14 @@ func (p *Publisher) Start(ctx context.Context) error {
 			switch p.config.PublishPattern {
 			case config.PublishPatternSteady, config.PublishPatternRandom:
 				for range p.config.PublishBurstSize {
-					if err := p.publishMessage(ctx); err != nil {
+					if err := p.circuitBreaker.call(func() error {
+						return p.publishMessage(ctx)
+					}); err != nil {
+						if errors.Is(err, errCircuitOpen) {
+							p.logger.Debug("circuit breaker open - skipping publish", zap.String("id", p.config.ID))
+							p.statsRecorder.RecordPublishError(err)
+							continue
+						}
 						if errors.Is(err, nats.ErrTimeout) {
 							p.logger.Warn("publish timeout - NATS may be overloaded", zap.String("id", p.config.ID))
 						} else if errors.Is(err, nats.ErrConnectionClosed) {
@@ -258,7 +262,7 @@ func (p *Publisher) Cleanup() {
 }
 
 // CreatePublishers creates and starts publishers based on the load test spec and stream configurations
-func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) []PublisherInterface {
+func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group, cb circuitBreaker) []PublisherInterface {
 	publishers := make([]PublisherInterface, 0)
 
 	for _, streamSpec := range loadTestSpec.Streams {
@@ -285,7 +289,7 @@ func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 						UseJetStream:     loadTestSpec.UseJetStream,
 					}
 
-					publisher := NewPublisher(nc, js, pubCfg, statsCollector, logger)
+					publisher := NewPublisher(nc, js, pubCfg, statsCollector, logger, cb)
 					publishers = append(publishers, publisher)
 
 					eg.Go(func() error {

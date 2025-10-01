@@ -98,6 +98,9 @@ func NewCollector(logger *zap.Logger, storage Storage) *Collector {
 }
 
 func (c *Collector) SetConfig(loadTestSpec *config.LoadTestSpec) error {
+	if c == nil {
+		return fmt.Errorf("collector is nil or stopped")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -128,11 +131,14 @@ func (c *Collector) SetConfig(loadTestSpec *config.LoadTestSpec) error {
 }
 
 func (c *Collector) RecordPublish() {
+	if c == nil || c.stopped.Load() {
+		return
+	}
 	c.published.Add(1)
 }
 
 func (c *Collector) RecordPublishError(err error) {
-	if c.stopped.Load() {
+	if c == nil || c.stopped.Load() {
 		return
 	}
 	c.mu.Lock()
@@ -146,7 +152,7 @@ func (c *Collector) RecordConsume() {
 }
 
 func (c *Collector) RecordConsumeError(err error) {
-	if c.stopped.Load() {
+	if c == nil || c.stopped.Load() {
 		return
 	}
 	c.mu.Lock()
@@ -156,7 +162,7 @@ func (c *Collector) RecordConsumeError(err error) {
 }
 
 func (c *Collector) RecordError(err error) {
-	if c.stopped.Load() {
+	if c == nil || c.stopped.Load() {
 		return
 	}
 	c.mu.Lock()
@@ -193,7 +199,7 @@ func (c *Collector) recordError(err error) {
 }
 
 func (c *Collector) RecordLatency(latency time.Duration) {
-	if c.stopped.Load() {
+	if c == nil || c.stopped.Load() {
 		return
 	}
 	c.mu.Lock()
@@ -208,7 +214,7 @@ func (c *Collector) RecordLatency(latency time.Duration) {
 }
 
 func (c *Collector) CollectStats() *Stats {
-	if c.stopped.Load() {
+	if c == nil || c.stopped.Load() {
 		return nil
 	}
 	c.mu.Lock()
@@ -367,7 +373,7 @@ func (c *Collector) Start(ctx context.Context, statsInterval time.Duration) {
 }
 
 func (c *Collector) GetHistory(limit int) []Stats {
-	if c.stopped.Load() {
+	if c == nil || c.stopped.Load() {
 		return []Stats{}
 	}
 	c.mu.RLock()
@@ -393,7 +399,7 @@ func (c *Collector) GetHistory(limit int) []Stats {
 }
 
 func (c *Collector) WriteFailure(err error) {
-	if c.stopped.Load() {
+	if c == nil || c.stopped.Load() {
 		return
 	}
 	c.mu.RLock()
@@ -419,7 +425,7 @@ func (c *Collector) WriteFailure(err error) {
 
 // SetRampUpStatus sets the current ramp-up status
 func (c *Collector) SetRampUpStatus(active bool, currentProgress float64, timeRemaining time.Duration) {
-	if c.stopped.Load() {
+	if c == nil || c.stopped.Load() {
 		return
 	}
 	c.mu.Lock()
@@ -434,7 +440,7 @@ func (c *Collector) SetRampUpStatus(active bool, currentProgress float64, timeRe
 
 // Cleanup releases all resources held by the collector
 func (c *Collector) Cleanup() error {
-	if c.stopped.Load() {
+	if c == nil || c.stopped.Load() {
 		return nil
 	}
 

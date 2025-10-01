@@ -45,6 +45,7 @@ type Engine struct {
 	errGroup             *errgroup.Group
 	streamManager        StreamManagerInterface
 	rampUpController     RampUpControllerInterface
+	circuitBreaker       circuitBreaker
 }
 
 func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublishers, enableConsumers bool) *Engine {
@@ -56,6 +57,7 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublis
 		publishers:           make([]PublisherInterface, 0),
 		consumers:            make([]ConsumerInterface, 0),
 		natsJetStreamContext: nil,
+		circuitBreaker:       newCircuitBreaker(5, 15*time.Second),
 	}
 }
 
@@ -101,12 +103,12 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	}
 
 	if e.enablePublishers {
-		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
+		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.circuitBreaker)
 	}
 
 	var err error
 	if e.enableConsumers {
-		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
+		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.circuitBreaker)
 		if err != nil {
 			e.cleanup(5 * time.Minute)
 			e.logger.Error("Failed to start consumers", zap.Error(err))
