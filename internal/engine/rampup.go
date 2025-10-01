@@ -109,7 +109,7 @@ func (rum *RampUpManager) setAllPublishersToFullRate(publishers []PublisherInter
 func (rum *RampUpManager) updatePublisherRates(publishers []PublisherInterface, progress float64) {
 	for _, pub := range publishers {
 		targetRate := pub.GetTargetRate()
-		currentRate := max(1, min(targetRate, int32(progress*float64(targetRate))))
+		currentRate := max(1, min(targetRate, int64(progress*float64(targetRate))))
 		pub.SetRate(currentRate)
 	}
 }

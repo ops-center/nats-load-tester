@@ -38,7 +38,7 @@ type PublisherConfig struct {
 	StreamName       string
 	Subject          string
 	MessageSize      int32
-	PublishRate      int32
+	PublishRate      int64
 	TrackLatency     bool
 	PublishPattern   string
 	PublishBurstSize int32
@@ -53,8 +53,8 @@ type Publisher struct {
 	statsRecorder  statsCollector
 	logger         *zap.Logger
 	messageData    []byte
-	currentRate    atomic.Int32
-	targetRate     int32
+	currentRate    atomic.Int64
+	targetRate     int64
 	stopped        bool
 	circuitBreaker circuitBreaker
 }
@@ -83,7 +83,7 @@ func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, st
 		statsRecorder:  statsCollector,
 		logger:         logger,
 		messageData:    messageData,
-		currentRate:    atomic.Int32{},
+		currentRate:    atomic.Int64{},
 		targetRate:     cfg.PublishRate,
 		circuitBreaker: cb,
 	}
@@ -150,7 +150,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 	}
 }
 
-func (p *Publisher) updateTicker(ticker *time.Ticker, currentRate int32) error {
+func (p *Publisher) updateTicker(ticker *time.Ticker, currentRate int64) error {
 	interval, err := p.calculatePublishInterval(currentRate)
 	if err != nil {
 		return err
@@ -159,19 +159,19 @@ func (p *Publisher) updateTicker(ticker *time.Ticker, currentRate int32) error {
 	return nil
 }
 
-func (p *Publisher) calculatePublishInterval(currentRate int32) (time.Duration, error) {
+func (p *Publisher) calculatePublishInterval(currentRate int64) (time.Duration, error) {
 	if currentRate <= 0 {
 		return 0, fmt.Errorf("current rate is %d, cannot calculate interval", currentRate)
 	}
 
 	switch p.config.PublishPattern {
 	case config.PublishPatternSteady:
-		return time.Second / time.Duration(currentRate), nil
+		return max(1, time.Second/time.Duration(currentRate)), nil
 	case config.PublishPatternRandom:
 		baseInterval := time.Second / time.Duration(currentRate)
 		jitterPercent := rand.Intn(100) - 50
 		jitter := baseInterval * time.Duration(jitterPercent) / 100
-		return baseInterval + jitter, nil
+		return max(1, baseInterval+jitter), nil
 	default:
 		return 0, fmt.Errorf("unknown publish pattern: %s", p.config.PublishPattern)
 	}
@@ -216,19 +216,19 @@ func (p *Publisher) publishMessage(ctx context.Context) error {
 }
 
 // SetRate updates the current publishing rate
-func (p *Publisher) SetRate(rate int32) {
+func (p *Publisher) SetRate(rate int64) {
 	rate = max(rate, 1)
 	rate = min(rate, p.targetRate)
-	p.currentRate.Store(int32(rate))
+	p.currentRate.Store(rate)
 }
 
 // GetCurrentRate returns the current publishing rate
-func (p *Publisher) GetCurrentRate() int32 {
+func (p *Publisher) GetCurrentRate() int64 {
 	return p.currentRate.Load()
 }
 
 // GetTargetRate returns the target publishing rate
-func (p *Publisher) GetTargetRate() int32 {
+func (p *Publisher) GetTargetRate() int64 {
 	return p.targetRate
 }
 
