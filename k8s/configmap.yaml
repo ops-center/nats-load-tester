@@ -31,33 +31,33 @@ data:
               "discard_new_per_subject": false,
               "discard": "old",
               "max_msgs": 100000000,
-              "max_bytes": 2648576000,
+              "max_bytes": 264857600,
               "max_msgs_per_subject": 100000000,
               "max_consumers": 100000
             }
           ],
           "publishers": {
-            "count_per_stream": 50,
+            "count_per_stream": 80,
             "stream_name_prefix": "load_stream",
-            "publish_rate_per_second": 100000000,
+            "publish_rate_per_second": 10000000,
             "publish_pattern": "steady",
-            "publish_burst_size": 1,
-            "message_size_bytes": 1024,
-            "track_latency": false
+            "publish_burst_size": 50,
+            "message_size_bytes": 2048,
+            "track_latency": true
           },
           "consumers": {
             "stream_name_prefix": "load_stream",
-            "type": "pull",
-            "count_per_stream": 70,
+            "type": "push",
+            "count_per_stream": 50,
             "durable_name_prefix": "load_consumer",
             "ack_wait_seconds": 5,
             "max_ack_pending": 1000,
-            "consume_delay_ms": 300,
+            "consume_delay_ms": 500,
             "ack_policy": "explicit"
           },
           "behavior": {
             "duration_seconds": 30,
-            "ramp_up_seconds": 1
+            "ramp_up_seconds": 0
           },
           "log_limits": {
             "max_lines": 50,

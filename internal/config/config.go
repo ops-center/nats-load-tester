@@ -111,7 +111,7 @@ type StreamSpec struct {
 type PublisherConfig struct {
 	CountPerStream       int32  `json:"count_per_stream"`
 	StreamNamePrefix     string `json:"stream_name_prefix"`
-	PublishRatePerSecond int32  `json:"publish_rate_per_second"`
+	PublishRatePerSecond int64  `json:"publish_rate_per_second"`
 	PublishPattern       string `json:"publish_pattern"`
 	PublishBurstSize     int32  `json:"publish_burst_size"`
 	MessageSizeBytes     int32  `json:"message_size_bytes"`
@@ -562,7 +562,7 @@ func (lts *LoadTestSpec) ApplyMultipliers(rp RepeatPolicy) {
 	lts.Consumers.CountPerStream = int32(float64(original.Consumers.CountPerStream) * rp.Consumers.CountPerStreamMultiplier)
 
 	lts.Publishers.CountPerStream = int32(float64(original.Publishers.CountPerStream) * rp.Publishers.CountPerStreamMultiplier)
-	lts.Publishers.PublishRatePerSecond = int32(float64(original.Publishers.PublishRatePerSecond) * rp.Publishers.PublishRateMultiplier)
+	lts.Publishers.PublishRatePerSecond = int64(float64(original.Publishers.PublishRatePerSecond) * rp.Publishers.PublishRateMultiplier)
 	lts.Publishers.MessageSizeBytes = int32(float64(original.Publishers.MessageSizeBytes) * rp.Publishers.MessageSizeBytesMultiplier)
 }
 
