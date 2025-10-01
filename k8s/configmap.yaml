@@ -31,17 +31,17 @@ data:
               "discard_new_per_subject": false,
               "discard": "old",
               "max_msgs": 100000000,
-              "max_bytes": 264857600,
+              "max_bytes": 2648576000,
               "max_msgs_per_subject": 100000000,
-              "max_consumers": 100000
+              "max_consumers": 1000000
             }
           ],
           "publishers": {
-            "count_per_stream": 80,
+            "count_per_stream": 150,
             "stream_name_prefix": "load_stream",
-            "publish_rate_per_second": 10000000,
+            "publish_rate_per_second": 100000000,
             "publish_pattern": "steady",
-            "publish_burst_size": 50,
+            "publish_burst_size": 10,
             "message_size_bytes": 2048,
             "track_latency": true
           },

@@ -202,6 +202,23 @@ curl http://service-endpoint:9481/stats?limit=10
 }
 ```
 
+## Performance Profiling
+
+pprof profiling endpoints are available via the `--enable-pprof` flag. Enable in deployment and port-forward to collect profiles:
+
+```bash
+# Port-forward to pod
+kubectl port-forward deployment/nats-load-tester 9481:9481
+
+# Collect profiles (in another terminal)
+./hack/collect-profiles.sh 60 ./profiles 9481
+
+# Analyze
+go tool pprof -http=:9090 ./profiles/cpu.prof
+```
+
+**Available endpoints:** `/debug/pprof/` (cpu, heap, goroutine, block, mutex)
+
 ## TODO
 
 - [x] **CLI Operational Modes**: Add `--mode=publish|consume|both` CLI arguments for specialized pod roles

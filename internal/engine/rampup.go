@@ -102,7 +102,7 @@ func (rum *RampUpManager) setAllPublishersToFullRate(publishers []PublisherInter
 	for _, pub := range publishers {
 		pub.SetRate(pub.GetTargetRate())
 	}
-	rum.logger.Info("All publishers set to full rate", zap.Int("publishers", len(publishers)))
+	rum.logger.Info("All publishers set to full rate")
 }
 
 // updatePublisherRates updates all publisher rates based on ramp-up progress

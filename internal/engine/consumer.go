@@ -369,5 +369,7 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 		return consumers, fmt.Errorf("one or more consumers failed to start: %w", err)
 	}
 
+	logger.Info("All consumers started", zap.Int("count", len(consumers)))
+
 	return consumers, nil
 }

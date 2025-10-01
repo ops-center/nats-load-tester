@@ -48,6 +48,8 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 		return fmt.Errorf("context is nil")
 	}
 
+	streamCount := 0
+
 	for _, streamSpec := range loadTestSpec.Streams {
 		streamNames := streamSpec.GetFormattedStreamNames()
 		for streamIndex, streamName := range streamNames {
@@ -72,7 +74,6 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 			if err := exponentialBackoff(ctx, 1*time.Second, 1.5, 5, 5*time.Second, func() error {
 				_, err := sm.js.CreateOrUpdateStream(ctx, streamConfig)
 				if err == nil {
-					sm.logger.Info("Created or updated stream", zap.String("name", streamName))
 					return nil
 				}
 
@@ -89,13 +90,17 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 					return fmt.Errorf("failed to recreate stream %s: %w", streamName, createErr)
 				}
 
-				sm.logger.Info("Deleted and recreated stream", zap.String("name", streamName))
+				sm.logger.Warn("Deleted and recreated stream", zap.String("name", streamName))
 				return nil
 			}); err != nil {
 				return err
 			}
+
+			streamCount++
 		}
 	}
+
+	sm.logger.Info("Setup streams completed", zap.Int("total_streams", streamCount))
 
 	return nil
 }

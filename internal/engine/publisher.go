@@ -46,7 +46,6 @@ type PublisherConfig struct {
 }
 
 type Publisher struct {
-	mu             sync.Mutex
 	nc             *nats.Conn
 	js             jetstream.JetStream
 	config         PublisherConfig
@@ -55,7 +54,7 @@ type Publisher struct {
 	messageData    []byte
 	currentRate    atomic.Int64
 	targetRate     int64
-	stopped        bool
+	stopped        atomic.Bool
 	circuitBreaker circuitBreaker
 }
 
@@ -91,7 +90,7 @@ func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, st
 
 func (p *Publisher) Start(ctx context.Context) error {
 	// Start with a rate of 1/s, will be updated during ramp-up
-	p.currentRate.Store(1)
+	p.SetRate(1)
 
 	initialInterval, err := p.calculatePublishInterval(p.GetCurrentRate())
 	if err != nil {
@@ -107,13 +106,16 @@ func (p *Publisher) Start(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			p.logger.Info("Publisher stopping", zap.String("id", p.config.ID))
+			p.Cleanup()
 			return nil
 
 		case <-ticker.C:
 			switch p.config.PublishPattern {
 			case config.PublishPatternSteady, config.PublishPatternRandom:
 				for range p.config.PublishBurstSize {
+					if p.stopped.Load() {
+						return nil
+					}
 					if err := p.circuitBreaker.call(func() error {
 						return p.publishMessage(ctx)
 					}); err != nil {
@@ -122,6 +124,10 @@ func (p *Publisher) Start(ctx context.Context) error {
 							p.statsRecorder.RecordPublishError(err)
 							continue
 						}
+						if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+							return nil
+						}
+
 						if errors.Is(err, nats.ErrTimeout) {
 							p.logger.Warn("publish timeout - NATS may be overloaded", zap.String("id", p.config.ID))
 						} else if errors.Is(err, nats.ErrConnectionClosed) {
@@ -137,6 +143,9 @@ func (p *Publisher) Start(ctx context.Context) error {
 					}
 				}
 
+				if p.stopped.Load() {
+					return nil
+				}
 				if currentRate := p.GetCurrentRate(); currentRate != lastRate {
 					lastRate = currentRate
 					if err := p.updateTicker(ticker, currentRate); err != nil {
@@ -185,6 +194,9 @@ var messageBufferPool = sync.Pool{
 }
 
 func (p *Publisher) publishMessage(ctx context.Context) error {
+	if p.stopped.Load() {
+		return nil
+	}
 	bufPtr := messageBufferPool.Get().(*[]byte)
 	buf := *bufPtr
 	if cap(buf) < len(p.messageData) {
@@ -249,21 +261,17 @@ func (p *Publisher) GetSubject() string {
 
 // Cleanup releases all resources held by the publisher
 func (p *Publisher) Cleanup() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.stopped {
+	if p.stopped.CompareAndSwap(false, true) {
 		return
 	}
-	p.stopped = true
-
 	p.messageData = nil
-	p.currentRate.Store(0)
+	p.currentRate.Store(1)
 }
 
 // CreatePublishers creates and starts publishers based on the load test spec and stream configurations
 func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group, cb circuitBreaker) []PublisherInterface {
 	publishers := make([]PublisherInterface, 0)
+	totalTargetRate := int64(0)
 
 	for _, streamSpec := range loadTestSpec.Streams {
 		// Only create publishers for streams that match the publisher's stream name prefix
@@ -291,6 +299,7 @@ func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 
 					publisher := NewPublisher(nc, js, pubCfg, statsCollector, logger, cb)
 					publishers = append(publishers, publisher)
+					totalTargetRate += publisher.GetTargetRate()
 
 					eg.Go(func() error {
 						defer publisher.Cleanup()
@@ -309,6 +318,8 @@ func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 			}
 		}
 	}
+
+	logger.Info("Created publishers", zap.Int("count", len(publishers)), zap.Int64("total_target_rate", totalTargetRate))
 
 	return publishers
 }

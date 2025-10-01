@@ -48,6 +48,7 @@ spec:
         - "--use-default-config=true"
         - "--port=9481"
         - "--mode=both"
+        - "--enable-pprof=true"
         readinessProbe:
           httpGet:
             path: /healthcheck

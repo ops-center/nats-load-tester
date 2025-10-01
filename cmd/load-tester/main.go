@@ -34,6 +34,7 @@ type cliArgs struct {
 	logLevel         string
 	useDefaultConfig bool
 	mode             string
+	enablePprof      bool
 }
 
 func main() {
@@ -51,6 +52,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&args.logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().BoolVar(&args.useDefaultConfig, "use-default-config", false, "Load default configuration on startup")
 	rootCmd.PersistentFlags().StringVar(&args.mode, "mode", "both", "Operational mode (publish, consume, both)")
+	rootCmd.PersistentFlags().BoolVar(&args.enablePprof, "enable-pprof", false, "Enable pprof profiling endpoints")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -89,7 +91,7 @@ func run(args *cliArgs) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	manager := loadtest.NewManager(args.port, args.mode, logger)
+	manager := loadtest.NewManager(args.port, args.mode, args.enablePprof, logger)
 
 	if args.useDefaultConfig {
 		if err := manager.LoadDefaultConfig(args.configFilePath); err != nil {
@@ -101,17 +103,21 @@ func run(args *cliArgs) error {
 		return fmt.Errorf("failed to start manager: %w", err)
 	}
 
-	var mgrDoneErr error
 	mgrDoneCh := manager.DoneCh()
 
 	select {
-	case <-sigCh:
-		logger.Info("Shutting down...")
+	case sig := <-sigCh:
+		logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
 		cancel()
-		mgrDoneErr = <-mgrDoneCh
+		if err := <-mgrDoneCh; err != nil {
+			logger.Error("Manager shutdown error", zap.Error(err))
+		}
+		return nil
 	case err := <-mgrDoneCh:
-		mgrDoneErr = err
+		if err != nil {
+			logger.Error("Manager error", zap.Error(err))
+			return err
+		}
+		return nil
 	}
-
-	return mgrDoneErr
 }

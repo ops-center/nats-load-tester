@@ -41,9 +41,9 @@ type manager struct {
 	mode          string
 }
 
-func NewManager(port int, mode string, logger *zap.Logger) *manager {
+func NewManager(port int, mode string, enablePprof bool, logger *zap.Logger) *manager {
 	configChannel := make(chan *config.Config, 100)
-	httpServer := controlplane.NewHTTPServer(port, logger, configChannel)
+	httpServer := controlplane.NewHTTPServer(port, enablePprof, logger, configChannel)
 
 	return &manager{
 		eg:            nil,
@@ -79,7 +79,12 @@ func (m *manager) Start(ctx context.Context) error {
 	})
 
 	go func() {
-		m.doneCh <- m.eg.Wait()
+		err := m.eg.Wait()
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			m.doneCh <- err
+			return
+		}
+		m.doneCh <- nil
 	}()
 
 	return nil
@@ -226,7 +231,7 @@ func (m *manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 			m.logger.Info("========================================================================================")
 			lastLoadTest.ApplyMultipliers(cfg.RepeatPolicy)
 
-			m.logger.Info("Starting repeat configuration",
+			m.logger.Info("Starting repeat load spec",
 				zap.Int("iteration", repeatCount),
 				zap.String("name", lastLoadTest.Name),
 			)

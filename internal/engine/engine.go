@@ -196,12 +196,12 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 
-	// Cleanup publishers first to stop message production
+	e.logger.Info("Cleaning up publishers")
 	for _, publisher := range e.publishers {
 		publisher.Cleanup()
 	}
 
-	// Then cleanup consumers
+	e.logger.Info("Cleaning up consumers")
 	for _, consumer := range e.consumers {
 		if err := consumer.Cleanup(); err != nil {
 			e.logger.Error("Consumer cleanup failed",
@@ -212,6 +212,7 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 		}
 	}
 
+	e.logger.Info("Cleaning up streams")
 	if e.loadTestSpec != nil && e.loadTestSpec.UseJetStream && e.streamManager != nil {
 		if err := e.streamManager.CleanupStreams(cleanupCtx, e.loadTestSpec); err != nil {
 			e.logger.Error("Stream cleanup failed - streams may remain in NATS",
