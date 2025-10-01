@@ -104,8 +104,8 @@ type StreamSpec struct {
 	Discard              string `json:"discard"`                           // "old", "new" - defaults to "old"
 	MaxMsgs              *int64 `json:"max_msgs,omitempty"`                // maximum number of messages - defaults to -1 (unlimited)
 	MaxBytes             *int64 `json:"max_bytes,omitempty"`               // maximum total size of messages - defaults to -1 (unlimited)
-	MaxMsgsPerSubject    *int64 `json:"max_msgs_per_subject,omitempty"`    // maximum messages per subject - defaults to -1 (unlimited)
-	MaxConsumers         *int   `json:"max_consumers,omitempty"`           // maximum number of consumers - defaults to -1 (unlimited)
+	MaxMsgsPerSubject    int64  `json:"max_msgs_per_subject,omitempty"`    // maximum messages per subject
+	MaxConsumers         int    `json:"max_consumers,omitempty"`           // maximum number of consumers
 }
 
 type PublisherConfig struct {
@@ -127,6 +127,7 @@ type ConsumerConfig struct {
 	MaxAckPending     int32  `json:"max_ack_pending"`
 	ConsumeDelayMs    int64  `json:"consume_delay_ms"`
 	AckPolicy         string `json:"ack_policy"`
+	PullMaxMessages   int32  `json:"pull_max_messages"`
 }
 
 type BehaviorConfig struct {
@@ -319,16 +320,16 @@ func (s *StreamSpec) Validate() error {
 		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_msgs must be -1 (unlimited) or non-negative, got %d", *s.MaxMsgs))
 	}
 
-	if s.MaxBytes != nil && *s.MaxBytes < -1 {
+	if s.MaxBytes != nil && *s.MaxBytes < 0 {
 		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_bytes must be -1 (unlimited) or non-negative, got %d", *s.MaxBytes))
 	}
 
-	if s.MaxMsgsPerSubject != nil && *s.MaxMsgsPerSubject < -1 {
-		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_msgs_per_subject must be -1 (unlimited) or non-negative, got %d", *s.MaxMsgsPerSubject))
+	if s.MaxMsgsPerSubject < 0 {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_msgs_per_subject must be non-negative, got %d", s.MaxMsgsPerSubject))
 	}
 
-	if s.MaxConsumers != nil && *s.MaxConsumers < -1 {
-		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_consumers must be -1 (unlimited) or non-negative, got %d", *s.MaxConsumers))
+	if s.MaxConsumers < -1 {
+		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_consumers must be non-negative, got %d", s.MaxConsumers))
 	}
 
 	if len(streamValidationErrors) > 0 {
@@ -352,19 +353,19 @@ func (p *PublisherConfig) Validate() error {
 		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("stream_name_prefix required"))
 	}
 
-	if p.CountPerStream <= 0 {
-		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("count_per_stream must be positive, got %d", p.CountPerStream))
+	if p.CountPerStream < 0 {
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("count_per_stream must be non-negative, got %d", p.CountPerStream))
 	}
 
-	if p.PublishRatePerSecond <= 0 {
-		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("publish_rate_per_second must be positive, got %d", p.PublishRatePerSecond))
+	if p.PublishRatePerSecond < 0 {
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("publish_rate_per_second must be non-negative, got %d", p.PublishRatePerSecond))
 	}
 
-	if p.MessageSizeBytes <= 0 {
-		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("message_size_bytes must be positive, got %d", p.MessageSizeBytes))
+	if p.MessageSizeBytes < 0 {
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("message_size_bytes must be non-negative, got %d", p.MessageSizeBytes))
 	}
-	if p.PublishBurstSize <= 0 {
-		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("publish_burst_size must be positive, got %d", p.PublishBurstSize))
+	if p.PublishBurstSize < 0 {
+		publishValidationErrors = append(publishValidationErrors, fmt.Errorf("publish_burst_size must be non-negative, got %d", p.PublishBurstSize))
 	}
 
 	if p.PublishPattern != PublishPatternSteady && p.PublishPattern != PublishPatternRandom {
@@ -396,12 +397,12 @@ func (c *ConsumerConfig) Validate() error {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("ack_wait_seconds must be non-negative, got %d", c.AckWaitSeconds))
 	}
 
-	if c.MaxAckPending < 0 {
-		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("max_ack_pending must be non-negative, got %d", c.MaxAckPending))
-	}
-
 	if c.AckPolicy == "" {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("ack_policy required"))
+	}
+
+	if c.PullMaxMessages <= 0 {
+		c.PullMaxMessages = 100
 	}
 
 	return errors.Join(consumerValidationErrors...)
@@ -716,18 +717,12 @@ func (s *StreamSpec) GetMaxBytes() int64 {
 	return *s.MaxBytes
 }
 
-// GetMaxMsgsPerSubject returns the maximum messages per subject, defaults to -1 (unlimited) if nil
+// GetMaxMsgsPerSubject returns the maximum messages per subject
 func (s *StreamSpec) GetMaxMsgsPerSubject() int64 {
-	if s.MaxMsgsPerSubject == nil {
-		return -1
-	}
-	return *s.MaxMsgsPerSubject
+	return s.MaxMsgsPerSubject
 }
 
 // GetMaxConsumers returns the maximum number of consumers, defaults to -1 (unlimited) if nil
 func (s *StreamSpec) GetMaxConsumers() int {
-	if s.MaxConsumers == nil {
-		return -1
-	}
-	return *s.MaxConsumers
+	return s.MaxConsumers
 }

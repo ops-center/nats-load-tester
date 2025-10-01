@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/pprof"
+	"runtime"
 	"sync"
 	"time"
 
@@ -47,6 +49,7 @@ type HTTPServer struct {
 	server            *http.Server
 	logger            *zap.Logger
 	port              int
+	enablePprof       bool
 }
 
 type configManager struct {
@@ -54,9 +57,16 @@ type configManager struct {
 	hash   string
 }
 
-func NewHTTPServer(port int, logger *zap.Logger, configSendChannel chan<- *config.Config) *HTTPServer {
+func NewHTTPServer(port int, enablePprof bool, logger *zap.Logger, configSendChannel chan<- *config.Config) *HTTPServer {
+	if enablePprof {
+		runtime.SetBlockProfileRate(1)
+		runtime.SetMutexProfileFraction(1)
+		logger.Info("pprof profiling enabled")
+	}
+
 	return &HTTPServer{
 		port:              port,
+		enablePprof:       enablePprof,
 		logger:            logger,
 		configManager:     configManager{},
 		configSendChannel: configSendChannel,
@@ -84,6 +94,21 @@ func (h *HTTPServer) Start(ctx context.Context) error {
 		r.Get("/config", h.handleConfigGet)
 		r.Get("/stats", h.handleGetStatsHistory)
 	})
+
+	if h.enablePprof {
+		r.HandleFunc("/debug/pprof/", pprof.Index)
+		r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		r.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+		r.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+		r.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
+		r.Handle("/debug/pprof/block", pprof.Handler("block"))
+		r.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+		r.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+		h.logger.Info("pprof endpoints registered", zap.String("path", "/debug/pprof/"))
+	}
 
 	h.server = &http.Server{
 		Addr:           fmt.Sprintf(":%d", h.port),

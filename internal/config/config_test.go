@@ -225,6 +225,7 @@ func TestStreamSynchronizationValidation(t *testing.T) {
 					AckWaitSeconds:    30,
 					MaxAckPending:     1000,
 					AckPolicy:         "explicit",
+					PullMaxMessages:   100,
 				},
 				Behavior: BehaviorConfig{
 					DurationSeconds: 300,
@@ -368,8 +369,8 @@ func TestStreamConfigValidation(t *testing.T) {
 				Discard:                    DiscardNew,
 				MaxMsgs:                    &[]int64{1000}[0],
 				MaxBytes:                   &[]int64{1024 * 1024}[0], // 1MB
-				MaxMsgsPerSubject:          &[]int64{100}[0],
-				MaxConsumers:               &[]int{10}[0],
+				MaxMsgsPerSubject:          100,
+				MaxConsumers:               100,
 			},
 			wantError: false,
 		},
@@ -484,8 +485,8 @@ func TestStreamConfigValidation(t *testing.T) {
 				MessagesPerStreamPerSecond: 100,
 				MaxMsgs:                    &[]int64{-1}[0],
 				MaxBytes:                   &[]int64{-1}[0],
-				MaxMsgsPerSubject:          &[]int64{-1}[0],
-				MaxConsumers:               &[]int{-1}[0],
+				MaxMsgsPerSubject:          10000,
+				MaxConsumers:               10000,
 			},
 			wantError: false,
 		},
@@ -766,13 +767,17 @@ func TestStreamSpecGetterMethods(t *testing.T) {
 			expected int64
 		}{
 			{
-				name:     "nil defaults to -1",
-				stream:   StreamSpec{MaxMsgsPerSubject: nil},
+				name: "nil defaults to -1",
+				stream: StreamSpec{
+					MaxMsgsPerSubject: 500,
+				},
 				expected: -1,
 			},
 			{
-				name:     "explicit value",
-				stream:   StreamSpec{MaxMsgsPerSubject: &[]int64{500}[0]},
+				name: "explicit value",
+				stream: StreamSpec{
+					MaxMsgsPerSubject: 500,
+				},
 				expected: 500,
 			},
 		}
@@ -794,13 +799,15 @@ func TestStreamSpecGetterMethods(t *testing.T) {
 			expected int
 		}{
 			{
-				name:     "nil defaults to -1",
-				stream:   StreamSpec{MaxConsumers: nil},
+				name: "nil defaults to -1",
+				stream: StreamSpec{
+					MaxConsumers: 1000000,
+				},
 				expected: -1,
 			},
 			{
 				name:     "explicit value",
-				stream:   StreamSpec{MaxConsumers: &[]int{10}[0]},
+				stream:   StreamSpec{MaxConsumers: 10},
 				expected: 10,
 			},
 		}
