@@ -1,3 +1,19 @@
+/*
+Copyright AppsCode Inc. and Contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package stats
 
 import (
@@ -14,8 +30,10 @@ import (
 )
 
 const (
-	statsDataTTL   = 24 * time.Hour
-	failureDataTTL = 72 * time.Hour
+	DefaultBadgerGCIntervalMinutes = 5
+	BadgerGCDiscardRatio           = 0.5
+	statsDataTTL                   = 24 * time.Hour
+	failureDataTTL                 = 72 * time.Hour
 )
 
 type BadgerStorage struct {
@@ -49,15 +67,13 @@ func NewBadgerStorage(path string, logger *zap.Logger) (*BadgerStorage, error) {
 	}
 
 	go func() {
-		// TODO: make this configurable and/or smarter
-		// https://docs.hypermode.com/badger/quickstart#garbage-collection
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(DefaultBadgerGCIntervalMinutes * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 			again:
-				err := storage.db.RunValueLogGC(0.5)
+				err := storage.db.RunValueLogGC(BadgerGCDiscardRatio)
 				if err == nil {
 					goto again
 				}
@@ -71,6 +87,9 @@ func NewBadgerStorage(path string, logger *zap.Logger) (*BadgerStorage, error) {
 }
 
 func (b *BadgerStorage) WriteStats(loadTestSpec *config.LoadTestSpec, stats Stats) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	hash := loadTestSpec.Hash()
 	key := fmt.Sprintf("stats:%s:%d", hash, stats.Timestamp.UnixMilli())
 	value, err := json.Marshal(stats)
@@ -88,6 +107,9 @@ func (b *BadgerStorage) WriteStats(loadTestSpec *config.LoadTestSpec, stats Stat
 }
 
 func (b *BadgerStorage) WriteFailure(loadTestSpec *config.LoadTestSpec, stats Stats) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	hash := loadTestSpec.Hash()
 	key := fmt.Sprintf("failure:%s:%d", hash, stats.Timestamp.UnixMilli())
 	value, err := json.Marshal(stats)
@@ -121,10 +143,15 @@ func (b *BadgerStorage) Close() error {
 
 // NOTE: NOT SAFE FROM CONCURRENT READS
 func (b *BadgerStorage) Clear() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.db.DropAll()
 }
 
 func (b *BadgerStorage) GetStats(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	var stats []StatsEntry
 	hash := loadTestSpec.Hash()
 
@@ -189,6 +216,9 @@ func (b *BadgerStorage) GetStats(loadTestSpec *config.LoadTestSpec, limit int, s
 }
 
 func (b *BadgerStorage) GetFailures(loadTestSpec *config.LoadTestSpec, limit int, since *time.Time) ([]StatsEntry, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	var failures []StatsEntry
 	hash := loadTestSpec.Hash()
 

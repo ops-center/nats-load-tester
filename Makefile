@@ -1,13 +1,36 @@
+# Copyright AppsCode Inc. and Contributors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Configurable variables
-DOCKER_REGISTRY ?= sami7786
+DOCKER_REGISTRY ?= $(REGISTRY)
+ifeq ($(DOCKER_REGISTRY),)
+$(error DOCKER_REGISTRY must be set via DOCKER_REGISTRY variable or REGISTRY environment variable)
+endif
 IMAGE_NAME ?= nats-load-tester
 VERSION ?= latest
 K8S_NAMESPACE ?= ace
+
 NATS_SERVICE_NAME ?= ace-nats
 NATS_SERVICE_NAMESPACE ?= ace
 NATS_PORT ?= 4222
 NATS_CREDS_SECRET_NAME ?= ace-nats-cred
 NATS_CREDS_MOUNT_PATH ?= /etc/nats/creds
+
+GO_VERSION       ?= 1.25
+BUILD_IMAGE      ?= ghcr.io/appscode/golang-dev:$(GO_VERSION)
+REPO     := $(notdir $(shell pwd))
+DOCKER_REPO_ROOT := /go/src/$(GO_PKG)/$(REPO)
 
 # Full image name
 FULL_IMAGE_NAME = $(DOCKER_REGISTRY)/$(IMAGE_NAME):$(VERSION)
@@ -78,6 +101,18 @@ test:
 run-local:
 	go run cmd/load-tester/main.go
 
+.PHONY: add-license
+add-license:
+	@echo "Adding license header"
+	@docker run --rm 	                                 \
+		-u $$(id -u):$$(id -g)                           \
+		-v /tmp:/.cache                                  \
+		-v $$(pwd):$(DOCKER_REPO_ROOT)                   \
+		-w $(DOCKER_REPO_ROOT)                           \
+		--env HTTP_PROXY=$(HTTP_PROXY)                   \
+		--env HTTPS_PROXY=$(HTTPS_PROXY)                 \
+		$(BUILD_IMAGE)                                   \
+		ltag -t "./hack/license" --excludes "vendor contrib bin" -v
 
 .PHONY: config
 config:

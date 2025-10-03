@@ -1,3 +1,19 @@
+/*
+Copyright AppsCode Inc. and Contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package engine
 
 import (
@@ -7,10 +23,15 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.opscenter.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+)
+
+const (
+	engineCleanupTimeout = 5 * time.Minute
 )
 
 type Engine struct {
@@ -20,7 +41,7 @@ type Engine struct {
 	enableConsumers      bool
 	statsCollector       *stats.Collector
 	natsConn             *nats.Conn
-	natsJetStreamContext nats.JetStreamContext
+	natsJetStreamContext jetstream.JetStream
 	loadTestSpec         *config.LoadTestSpec
 	publishers           []PublisherInterface
 	consumers            []ConsumerInterface
@@ -28,6 +49,7 @@ type Engine struct {
 	errGroup             *errgroup.Group
 	streamManager        StreamManagerInterface
 	rampUpController     RampUpControllerInterface
+	circuitBreaker       circuitBreaker
 }
 
 func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublishers, enableConsumers bool) *Engine {
@@ -39,6 +61,7 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublis
 		publishers:           make([]PublisherInterface, 0),
 		consumers:            make([]ConsumerInterface, 0),
 		natsJetStreamContext: nil,
+		circuitBreaker:       newCircuitBreaker(5, 15*time.Second, logger),
 	}
 }
 
@@ -78,20 +101,20 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	if loadTestSpec.UseJetStream {
 		if err := e.streamManager.SetupStreams(engineCtx, loadTestSpec); err != nil {
 			e.logger.Error("Failed to setup streams", zap.Error(err))
-			e.cleanup()
+			e.cleanup(engineCleanupTimeout)
 			return fmt.Errorf("failed to setup streams: %w", err)
 		}
 	}
 
 	if e.enablePublishers {
-		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
+		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.circuitBreaker)
 	}
 
 	var err error
 	if e.enableConsumers {
-		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
+		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.circuitBreaker)
 		if err != nil {
-			e.cleanup()
+			e.cleanup(engineCleanupTimeout)
 			e.logger.Error("Failed to start consumers", zap.Error(err))
 			return fmt.Errorf("failed to start consumers: %w", err)
 		}
@@ -104,7 +127,10 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	return nil
 }
 
-func (e *Engine) Stop() error {
+func (e *Engine) Stop(ctx context.Context) error {
+	if e == nil {
+		return nil
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -119,7 +145,7 @@ func (e *Engine) Stop() error {
 		err = e.errGroup.Wait()
 	}
 
-	e.cleanup()
+	e.cleanup(engineCleanupTimeout)
 
 	return err
 }
@@ -154,9 +180,8 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 
 	e.natsConn = nc
 
-	/// TODO: migrate to the newer "github.com/nats-io/nats.go/jetstream" api
 	if loadTestSpec.UseJetStream {
-		js, err := nc.JetStream()
+		js, err := jetstream.New(e.natsConn)
 		if err != nil {
 			nc.Close()
 			return err
@@ -167,12 +192,20 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 	return nil
 }
 
-func (e *Engine) cleanup() {
+func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 	if e.cancel != nil {
 		e.cancel()
 	}
+	// create a new context here as cleanup is usually called when the overlying context is cancelled
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
 
-	// Clean up consumers
+	e.logger.Info("Cleaning up publishers")
+	for _, publisher := range e.publishers {
+		publisher.Cleanup()
+	}
+
+	e.logger.Info("Cleaning up consumers")
 	for _, consumer := range e.consumers {
 		if err := consumer.Cleanup(); err != nil {
 			e.logger.Error("Consumer cleanup failed",
@@ -183,21 +216,35 @@ func (e *Engine) cleanup() {
 		}
 	}
 
-	// Clean up streams if JetStream is enabled
+	e.logger.Info("Cleaning up streams")
 	if e.loadTestSpec != nil && e.loadTestSpec.UseJetStream && e.streamManager != nil {
-		if err := e.streamManager.CleanupStreams(e.loadTestSpec); err != nil {
-			e.logger.Error("Stream cleanup failed", zap.Error(err))
+		if err := exponentialBackoff(cleanupCtx, 1*time.Second, 1.5, 5, 5*time.Second, func() error {
+			return e.streamManager.CleanupStreams(cleanupCtx, e.loadTestSpec)
+		}); err != nil {
+			e.logger.Error("Stream cleanup failed - streams may remain in NATS",
+				zap.Error(err),
+				zap.String("test_name", e.loadTestSpec.Name))
+			e.statsCollector.RecordError(fmt.Errorf("stream cleanup failed: %w", err))
 		}
 	}
 
-	if e.natsConn != nil && e.natsConn.IsConnected() {
+	if e.natsConn != nil {
+		if e.natsConn.IsConnected() {
+			// Drain connection to allow pending messages to complete
+			if err := e.natsConn.Drain(); err != nil {
+				e.logger.Warn("Failed to drain NATS connection", zap.Error(err))
+			}
+		}
 		e.natsConn.Close()
 	}
 
+	e.circuitBreaker.reset()
 	e.natsJetStreamContext = nil
 	e.natsConn = nil
 	e.loadTestSpec = nil
 	e.streamManager = nil
-	e.publishers = e.publishers[:0]
-	e.consumers = e.consumers[:0]
+	e.rampUpController = nil
+	e.errGroup = nil
+	e.publishers = nil
+	e.consumers = nil
 }

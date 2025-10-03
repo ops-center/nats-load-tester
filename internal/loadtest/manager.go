@@ -1,9 +1,26 @@
+/*
+Copyright AppsCode Inc. and Contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package loadtest
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -12,21 +29,26 @@ import (
 	loadtest_engine "go.opscenter.dev/nats-load-tester/internal/engine"
 	"go.opscenter.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
-type Manager struct {
+type manager struct {
 	mutex         sync.Mutex
+	eg            *errgroup.Group
+	doneCh        chan error
 	httpServer    *controlplane.HTTPServer
 	logger        *zap.Logger
 	configChannel chan *config.Config
 	mode          string
 }
 
-func NewManager(port int, mode string, logger *zap.Logger) *Manager {
+func NewManager(port int, mode string, enablePprof bool, logger *zap.Logger) *manager {
 	configChannel := make(chan *config.Config, 100)
-	httpServer := controlplane.NewHTTPServer(port, logger, configChannel)
+	httpServer := controlplane.NewHTTPServer(port, enablePprof, logger, configChannel)
 
-	return &Manager{
+	return &manager{
+		eg:            nil,
+		doneCh:        make(chan error, 1),
 		httpServer:    httpServer,
 		logger:        logger,
 		configChannel: configChannel,
@@ -34,28 +56,54 @@ func NewManager(port int, mode string, logger *zap.Logger) *Manager {
 	}
 }
 
-func (m *Manager) Start(ctx context.Context) error {
-	var wg sync.WaitGroup
+func (m *manager) Start(ctx context.Context) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 
-	wg.Go(func() {
-		if err := m.httpServer.Start(ctx); err != nil {
-			m.logger.Error("http server failed", zap.Error(err))
+	if m.eg != nil {
+		return fmt.Errorf("manager already started")
+	}
+
+	var mgrCtx context.Context
+	m.eg, mgrCtx = errgroup.WithContext(ctx)
+
+	m.eg.Go(func() error {
+		if err := m.httpServer.Start(mgrCtx); err != nil {
+			return fmt.Errorf("http server failed %w", err)
 		}
+		return nil
 	})
 
-	wg.Go(func() {
-		m.run(ctx)
+	m.eg.Go(func() error {
+		m.run(mgrCtx)
+		return nil
 	})
 
-	wg.Wait()
+	go func() {
+		err := m.eg.Wait()
+		if !errors.Is(err, context.Canceled) &&
+			!errors.Is(err, http.ErrServerClosed) &&
+			!errors.Is(err, context.DeadlineExceeded) {
+			m.doneCh <- err
+			return
+		}
+		m.doneCh <- nil
+	}()
+
 	return nil
 }
 
-func (m *Manager) LoadDefaultConfig(configFilePath string) error {
+func (m *manager) DoneCh() <-chan error {
+	return m.doneCh
+}
+
+func (m *manager) LoadDefaultConfig(configFilePath string) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 	return loadDefaultConfig(m.configChannel, m.logger, configFilePath)
 }
 
-func (m *Manager) run(ctx context.Context) {
+func (m *manager) run(ctx context.Context) {
 	var lastConfigCancel context.CancelFunc = nil
 
 	for {
@@ -80,7 +128,7 @@ func (m *Manager) run(ctx context.Context) {
 					select {
 					case newCfg := <-m.configChannel:
 						cfg = newCfg
-					case <-time.After(30 * time.Second):
+					case <-time.After(5 * time.Second):
 						return
 					default:
 						return
@@ -105,33 +153,40 @@ func (m *Manager) run(ctx context.Context) {
 			m.httpServer.SetCollector(statsCollector)
 			engine := loadtest_engine.NewEngine(m.logger, statsCollector, m.mode == "both" || m.mode == "publish", m.mode == "both" || m.mode == "consume")
 
-			go func(ctx context.Context, cfg *config.Config, engine *loadtest_engine.Engine, storage stats.Storage) {
-				defer m.mutex.Unlock()
+			m.eg.Go(func() error {
+				var errs []error
+				func(ctx context.Context, cfg *config.Config, engine *loadtest_engine.Engine, storage stats.Storage) {
+					defer m.mutex.Unlock()
 
-				defer func() {
-					m.httpServer.SetCollector(nil)
-					m.httpServer.SetConfig(nil)
-					if engine != nil {
-						if err := engine.Stop(); err != nil {
-							m.logger.Error("engine wait failed", zap.Error(err))
+					defer func() {
+						m.httpServer.SetCollector(nil)
+						m.httpServer.SetConfig(nil)
+						if engine != nil {
+							if err := engine.Stop(ctx); err != nil {
+								m.logger.Error("engine wait failed", zap.Error(err))
+								errs = append(errs, err)
+							}
 						}
-					}
-					if storage != nil {
-						if err := storage.Close(); err != nil {
-							m.logger.Error("failed to close storage", zap.Error(err))
+						if storage != nil {
+							if err := storage.Close(); err != nil {
+								m.logger.Error("failed to close storage", zap.Error(err))
+								errs = append(errs, err)
+							}
 						}
-					}
-				}()
+					}()
 
-				if err := m.processConfig(ctx, cfg, engine); err != nil {
-					m.logger.Error("failed to process config", zap.Error(err))
-				}
-			}(cfgCtx, cfg, engine, storage)
+					if err := m.processConfig(ctx, cfg, engine); err != nil {
+						m.logger.Error("failed to process config", zap.Error(err))
+						errs = append(errs, err)
+					}
+				}(cfgCtx, cfg, engine, storage)
+				return errors.Join(errs...)
+			})
 		}
 	}
 }
 
-func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine *loadtest_engine.Engine) error {
+func (m *manager) processConfig(ctx context.Context, cfg *config.Config, engine *loadtest_engine.Engine) error {
 	processLoadTestSpec := func(spec *config.LoadTestSpec, specName string) (bool, error) {
 		engineCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -147,7 +202,7 @@ func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 			m.logger.Info(specName+" spec completed", zap.String("name", spec.Name))
 		}
 
-		if err := engine.Stop(); err != nil {
+		if err := engine.Stop(ctx); err != nil {
 			m.logger.Error("engine wait failed", zap.Error(err))
 		}
 		return false, nil
@@ -179,17 +234,10 @@ func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 			m.logger.Info("========================================================================================")
 			lastLoadTest.ApplyMultipliers(cfg.RepeatPolicy)
 
-			m.logger.Info("Starting repeat configuration",
+			m.logger.Info("Starting repeat load spec",
 				zap.Int("iteration", repeatCount),
 				zap.String("name", lastLoadTest.Name),
 			)
-
-			currentConfig, err := json.Marshal(lastLoadTest)
-			if err != nil {
-				m.logger.Error("failed to marshal current config", zap.Error(err))
-			} else {
-				m.logger.Info("Current config: " + string(currentConfig))
-			}
 
 			done, err := processLoadTestSpec(lastLoadTest, "Repeat")
 			if done {
@@ -198,14 +246,20 @@ func (m *Manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 				}
 				return nil
 			}
-			if err != nil {
-				m.logger.Error("failed to process repeat load test spec", zap.Error(err))
-			}
 
-			m.logger.Info("Repeat spec completed",
-				zap.Int("iteration", repeatCount),
-				zap.String("name", lastLoadTest.Name),
-			)
+			if err != nil {
+				m.logger.Error(
+					"Failed to process repeat load test spec",
+					zap.Int("iteration", repeatCount),
+					zap.String("name", lastLoadTest.Name),
+					zap.Error(err),
+				)
+			} else {
+				m.logger.Info("Repeat spec completed",
+					zap.Int("iteration", repeatCount),
+					zap.String("name", lastLoadTest.Name),
+				)
+			}
 
 			repeatCount++
 		}
