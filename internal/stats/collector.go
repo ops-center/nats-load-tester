@@ -64,7 +64,7 @@ type Stats struct {
 	ConsumeErrors   uint64
 	PendingMessages int64
 	Latency         LatencyStats
-	Errors          []error
+	Errors          []string
 	RampUp          RampUpStats
 }
 
@@ -256,8 +256,12 @@ func (c *Collector) CollectStats() *Stats {
 		c.latencyIndex = 0
 	}
 
-	stats.Errors = make([]error, len(c.errors))
-	copy(stats.Errors, c.errors)
+	stats.Errors = make([]string, len(c.errors))
+	for i, err := range c.errors {
+		if err != nil {
+			stats.Errors[i] = err.Error()
+		}
+	}
 	c.errors = nil
 
 	stats.RampUp = c.rampUpStats
@@ -409,7 +413,7 @@ func (c *Collector) WriteFailure(err error) {
 
 	failureStats := Stats{
 		Timestamp: time.Now(),
-		Errors:    []error{err},
+		Errors:    []string{err.Error()},
 	}
 
 	// Write failure directly to storage (no in-memory cache)

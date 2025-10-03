@@ -22,28 +22,36 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 var errCircuitOpen = errors.New("circuit breaker is open")
 
+const (
+	openDebounce = 2 * time.Second
+)
+
 type circuitBreaker interface {
 	call(fn func() error) error
-	isOpen() bool
 	reset()
 }
 
 type simpleCircuitBreaker struct {
 	failures     atomic.Int32
+	logger       *zap.Logger
+	lastOpenTime atomic.Int64
 	lastFailure  atomic.Int64
 	isOpenFlag   atomic.Bool
 	maxFailures  int32
 	resetTimeout time.Duration
 }
 
-func newCircuitBreaker(maxFailures int, resetTimeout time.Duration) circuitBreaker {
+func newCircuitBreaker(maxFailures int, resetTimeout time.Duration, logger *zap.Logger) circuitBreaker {
 	return &simpleCircuitBreaker{
 		maxFailures:  int32(maxFailures),
 		resetTimeout: resetTimeout,
+		logger:       logger,
 	}
 }
 
@@ -64,19 +72,15 @@ func (cb *simpleCircuitBreaker) call(fn func() error) error {
 	if err != nil {
 		cb.failures.Add(1)
 		cb.lastFailure.Store(time.Now().UnixNano())
-		if cb.failures.Load() >= cb.maxFailures {
-			cb.isOpenFlag.Store(true)
+		if cb.failures.Load() >= cb.maxFailures && cb.isOpenFlag.CompareAndSwap(false, true) {
+			cb.lastOpenTime.Store(time.Now().UnixNano())
+			cb.logger.Warn("Circuit breaker opened", zap.Int32("failures", cb.failures.Load()), zap.NamedError("last error", err))
 		}
-	} else {
-		cb.failures.Store(0)
-		cb.isOpenFlag.Store(false)
+	} else if time.Since(time.Unix(0, cb.lastOpenTime.Load())) > openDebounce && cb.isOpenFlag.CompareAndSwap(true, false) {
+		cb.logger.Info("Circuit breaker closed")
 	}
 
 	return err
-}
-
-func (cb *simpleCircuitBreaker) isOpen() bool {
-	return cb.isOpenFlag.Load()
 }
 
 func (cb *simpleCircuitBreaker) reset() {
@@ -106,7 +110,7 @@ func exponentialBackoff(ctx context.Context, duration time.Duration, factor floa
 	for i := range steps {
 		select {
 		case <-ctx.Done():
-			return nil
+			return ctx.Err()
 		default:
 		}
 

@@ -111,21 +111,32 @@ func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
 
 	switch c.config.Type {
 	case config.ConsumerTypePush:
-		consumerConfig.DeliverSubject = fmt.Sprintf("_INBOX.%s", c.config.DurableName)
+		consumerConfig.DeliverSubject = nats.NewInbox()
 		var pushConsumer jetstream.PushConsumer
 		if err := c.circuitBreaker.call(func() error {
 			var err error
 			pushConsumer, err = c.js.CreateOrUpdatePushConsumer(ctx, c.config.StreamName, consumerConfig)
 			return err
 		}); err != nil {
+			c.statsCollector.RecordError(err)
 			return fmt.Errorf("failed to create push consumer: %w", err)
 		}
+
 		consumeContext, err := pushConsumer.Consume(
 			func(msg jetstream.Msg) {
 				c.handleNatsJetstreamMessage(ctx, msg)
 			},
+			jetstream.ConsumeErrHandler(func(consumeCtx jetstream.ConsumeContext, err error) {
+				c.logger.Error("Push consumer error",
+					zap.String("id", c.config.ID),
+					zap.String("stream", c.config.StreamName),
+					zap.String("subject", c.config.Subject),
+					zap.Error(err))
+				c.statsCollector.RecordError(err)
+			}),
 		)
 		if err != nil {
+			c.statsCollector.RecordError(err)
 			return fmt.Errorf("failed to start push consumer: %w", err)
 		}
 		c.jetstreamConsumeContext = consumeContext
@@ -138,14 +149,25 @@ func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
 			pullConsumer, err = c.js.CreateOrUpdateConsumer(ctx, c.config.StreamName, consumerConfig)
 			return err
 		}); err != nil {
+			c.statsCollector.RecordError(err)
 			return fmt.Errorf("failed to create pull consumer: %w", err)
 		}
+
 		consumeContext, err := pullConsumer.Consume(
 			func(msg jetstream.Msg) {
 				c.handleNatsJetstreamMessage(ctx, msg)
 			},
+			jetstream.ConsumeErrHandler(func(consumeCtx jetstream.ConsumeContext, err error) {
+				c.logger.Error("Pull consumer error",
+					zap.String("id", c.config.ID),
+					zap.String("stream", c.config.StreamName),
+					zap.String("subject", c.config.Subject),
+					zap.Error(err))
+				c.statsCollector.RecordError(err)
+			}),
 		)
 		if err != nil {
+			c.statsCollector.RecordError(err)
 			return fmt.Errorf("failed to start pull consumer: %w", err)
 		}
 		c.jetstreamConsumeContext = consumeContext
@@ -172,6 +194,7 @@ func (c *Consumer) startCoreConsumer(ctx context.Context) error {
 
 func (c *Consumer) handleNatsCoreMessage(ctx context.Context, msg *nats.Msg) {
 	if c.stopped.Load() {
+		c.logger.Warn("Received nats core message after consumer stopped")
 		return
 	}
 
@@ -181,6 +204,7 @@ func (c *Consumer) handleNatsCoreMessage(ctx context.Context, msg *nats.Msg) {
 
 func (c *Consumer) handleNatsJetstreamMessage(ctx context.Context, msg jetstream.Msg) {
 	if c.stopped.Load() {
+		c.logger.Warn("Received nats jetstream message after consumer stopped")
 		return
 	}
 
@@ -195,8 +219,7 @@ func (c *Consumer) handleNatsJetstreamMessage(ctx context.Context, msg jetstream
 	if c.config.AckPolicy != "none" {
 		if err := exponentialBackoff(ctx, AckRetryInitialDelayMs*time.Millisecond, AckRetryBackoffFactor, AckRetryMaxAttempts, AckRetryMaxDelayMs*time.Millisecond, func() error {
 			return c.circuitBreaker.call(msg.Ack)
-		}); errors.Is(err, errCircuitOpen) {
-			c.logger.Warn("Circuit breaker is open, skipping ack", zap.String("id", c.config.ID))
+		}); errors.Is(err, errCircuitOpen) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
 		} else if err != nil {
 			c.statsCollector.RecordConsumeError(err)
@@ -227,10 +250,7 @@ func (c *Consumer) processMessage(ctx context.Context, data []byte) {
 }
 
 func (c *Consumer) Cleanup() error {
-	if c == nil {
-		return nil
-	}
-	if !c.stopped.CompareAndSwap(false, true) {
+	if c == nil || !c.stopped.CompareAndSwap(false, true) {
 		return nil
 	}
 
@@ -339,7 +359,9 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 								return startErr
 							}
 							return nil
-						}); err != nil {
+						}); errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+							return nil
+						} else if err != nil {
 							statsCollector.RecordError(err)
 							return fmt.Errorf("consumer %s failed: %w", consumer.GetID(), err)
 						}

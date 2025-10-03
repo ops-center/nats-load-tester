@@ -16,6 +16,7 @@ sudo mv ${BINARY} /usr/bin/yq4
 ```bash
 sudo chmod +x ./hack/patch-nats-config.sh
 ./hack/patch-nats-config.sh
+# NOTE: the number of stream replicas in the configuration should ideally be equal to the number of ace-nats replicas
 kubectl patch sts -n ace ace-nats -p '{"spec":{"replicas":3}}'
 ```
 

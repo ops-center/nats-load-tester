@@ -56,6 +56,7 @@ type Publisher struct {
 	targetRate     int64
 	stopped        atomic.Bool
 	circuitBreaker circuitBreaker
+	bufferPool     *sync.Pool
 }
 
 type statsCollector interface {
@@ -75,6 +76,13 @@ func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, st
 		}
 	}
 
+	bufferPool := &sync.Pool{
+		New: func() any {
+			b := make([]byte, 0, cfg.MessageSize)
+			return &b
+		},
+	}
+
 	return &Publisher{
 		nc:             nc,
 		js:             js,
@@ -85,6 +93,7 @@ func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, st
 		currentRate:    atomic.Int64{},
 		targetRate:     cfg.PublishRate,
 		circuitBreaker: cb,
+		bufferPool:     bufferPool,
 	}
 }
 
@@ -110,50 +119,33 @@ func (p *Publisher) Start(ctx context.Context) error {
 			return nil
 
 		case <-ticker.C:
-			switch p.config.PublishPattern {
-			case config.PublishPatternSteady, config.PublishPatternRandom:
-				for range p.config.PublishBurstSize {
-					if p.stopped.Load() {
-						return nil
-					}
-					if err := p.circuitBreaker.call(func() error {
-						return p.publishMessage(ctx)
-					}); err != nil {
-						if errors.Is(err, errCircuitOpen) {
-							p.logger.Debug("circuit breaker open - skipping publish", zap.String("id", p.config.ID))
-							p.statsRecorder.RecordPublishError(err)
-							continue
-						}
-						if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-							return nil
-						}
-
-						if errors.Is(err, nats.ErrTimeout) {
-							p.logger.Warn("publish timeout - NATS may be overloaded", zap.String("id", p.config.ID))
-						} else if errors.Is(err, nats.ErrConnectionClosed) {
-							p.logger.Warn("publish failed - connection closed", zap.String("id", p.config.ID))
-						} else if errors.Is(err, nats.ErrSlowConsumer) {
-							p.logger.Warn("slow consumer detected - NATS backpressure", zap.String("id", p.config.ID))
-						} else {
-							p.logger.Error("failed to publish", zap.Error(err))
-						}
-						p.statsRecorder.RecordPublishError(err)
-					} else {
-						p.statsRecorder.RecordPublish()
-					}
-				}
-
+			for range p.config.PublishBurstSize {
 				if p.stopped.Load() {
 					return nil
 				}
-				if currentRate := p.GetCurrentRate(); currentRate != lastRate {
-					lastRate = currentRate
-					if err := p.updateTicker(ticker, currentRate); err != nil {
-						p.logger.Error("failed to update ticker", zap.Error(err))
+				if err := p.circuitBreaker.call(func() error {
+					return p.publishMessage()
+				}); err != nil {
+					if errors.Is(err, errCircuitOpen) {
+						continue
 					}
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+						return nil
+					}
+					p.statsRecorder.RecordPublishError(err)
+				} else {
+					p.statsRecorder.RecordPublish()
 				}
-			default:
-				return fmt.Errorf("unknown publish pattern: %s", p.config.PublishPattern)
+			}
+
+			if p.stopped.Load() {
+				return nil
+			}
+			if currentRate := p.GetCurrentRate(); currentRate != lastRate {
+				lastRate = currentRate
+				if err := p.updateTicker(ticker, currentRate); err != nil {
+					p.logger.Error("failed to update ticker", zap.Error(err))
+				}
 			}
 		}
 	}
@@ -186,18 +178,11 @@ func (p *Publisher) calculatePublishInterval(currentRate int64) (time.Duration, 
 	}
 }
 
-var messageBufferPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 0)
-		return &b
-	},
-}
-
-func (p *Publisher) publishMessage(ctx context.Context) error {
+func (p *Publisher) publishMessage() error {
 	if p.stopped.Load() {
 		return nil
 	}
-	bufPtr := messageBufferPool.Get().(*[]byte)
+	bufPtr := p.bufferPool.Get().(*[]byte)
 	buf := *bufPtr
 	if cap(buf) < len(p.messageData) {
 		buf = make([]byte, len(p.messageData))
@@ -212,13 +197,13 @@ func (p *Publisher) publishMessage(ctx context.Context) error {
 
 	var err error
 	if p.config.UseJetStream && p.js != nil {
-		_, err = p.js.Publish(ctx, p.config.Subject, message)
+		_, err = p.js.PublishAsync(p.config.Subject, message)
 	} else {
 		err = p.nc.Publish(p.config.Subject, message)
 	}
 
 	*bufPtr = buf[:0]
-	messageBufferPool.Put(bufPtr)
+	p.bufferPool.Put(bufPtr)
 
 	if err != nil {
 		return fmt.Errorf("publish failed: %w", err)
@@ -261,7 +246,7 @@ func (p *Publisher) GetSubject() string {
 
 // Cleanup releases all resources held by the publisher
 func (p *Publisher) Cleanup() {
-	if p.stopped.CompareAndSwap(false, true) {
+	if p == nil || !p.stopped.CompareAndSwap(false, true) {
 		return
 	}
 	p.messageData = nil

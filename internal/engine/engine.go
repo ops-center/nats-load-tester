@@ -30,6 +30,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	engineCleanupTimeout = 5 * time.Minute
+)
+
 type Engine struct {
 	mu                   sync.RWMutex
 	logger               *zap.Logger
@@ -57,7 +61,7 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublis
 		publishers:           make([]PublisherInterface, 0),
 		consumers:            make([]ConsumerInterface, 0),
 		natsJetStreamContext: nil,
-		circuitBreaker:       newCircuitBreaker(5, 15*time.Second),
+		circuitBreaker:       newCircuitBreaker(5, 15*time.Second, logger),
 	}
 }
 
@@ -97,7 +101,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	if loadTestSpec.UseJetStream {
 		if err := e.streamManager.SetupStreams(engineCtx, loadTestSpec); err != nil {
 			e.logger.Error("Failed to setup streams", zap.Error(err))
-			e.cleanup(5 * time.Minute)
+			e.cleanup(engineCleanupTimeout)
 			return fmt.Errorf("failed to setup streams: %w", err)
 		}
 	}
@@ -110,7 +114,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	if e.enableConsumers {
 		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.circuitBreaker)
 		if err != nil {
-			e.cleanup(5 * time.Minute)
+			e.cleanup(engineCleanupTimeout)
 			e.logger.Error("Failed to start consumers", zap.Error(err))
 			return fmt.Errorf("failed to start consumers: %w", err)
 		}
@@ -141,7 +145,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 		err = e.errGroup.Wait()
 	}
 
-	e.cleanup(5 * time.Minute)
+	e.cleanup(engineCleanupTimeout)
 
 	return err
 }
@@ -214,7 +218,9 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 
 	e.logger.Info("Cleaning up streams")
 	if e.loadTestSpec != nil && e.loadTestSpec.UseJetStream && e.streamManager != nil {
-		if err := e.streamManager.CleanupStreams(cleanupCtx, e.loadTestSpec); err != nil {
+		if err := exponentialBackoff(cleanupCtx, 1*time.Second, 1.5, 5, 5*time.Second, func() error {
+			return e.streamManager.CleanupStreams(cleanupCtx, e.loadTestSpec)
+		}); err != nil {
 			e.logger.Error("Stream cleanup failed - streams may remain in NATS",
 				zap.Error(err),
 				zap.String("test_name", e.loadTestSpec.Name))

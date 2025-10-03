@@ -87,7 +87,7 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 				}
 
 				return nil
-			}); err != nil {
+			}); err != nil { // dont ignore context cancellation/timeout errs here
 				return err
 			}
 
@@ -105,9 +105,8 @@ func (sm *StreamManager) CleanupStreams(cleanupCtx context.Context, loadTestSpec
 	for _, streamSpec := range loadTestSpec.Streams {
 		streamNames := streamSpec.GetFormattedStreamNames()
 		for _, streamName := range streamNames {
-			err := sm.js.DeleteStream(cleanupCtx, streamName)
-			if err != nil && err != jetstream.ErrStreamNotFound {
-				sm.logger.Warn("Failed to delete stream", zap.String("name", streamName), zap.Error(err))
+			if err := sm.js.DeleteStream(cleanupCtx, streamName); err != nil && err != jetstream.ErrStreamNotFound {
+				return err
 			}
 		}
 	}

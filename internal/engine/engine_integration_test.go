@@ -109,8 +109,8 @@ func TestNATSStreamConfigurationIntegration(t *testing.T) {
 		}
 	}()
 
-	t.Log("Waiting for publishers to generate messages...")
-	time.Sleep(5 * time.Second)
+	t.Log("Waiting for publishers to ramp up and generate messages...")
+	time.Sleep(12 * time.Second)
 
 	t.Log("Verifying stream configuration...")
 	err = verifyStreamConfiguration(t, natsURL, loadTestSpec)
