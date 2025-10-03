@@ -225,5 +225,6 @@ go tool pprof -http=:9090 ./profiles/cpu.prof
 - [x] **NATS API Migration**: Update from deprecated JetStream API to newer `github.com/nats-io/nats.go/jetstream`
 - [x] **Enhanced Latency Metrics**: Implemented P50, P90, P99 percentile tracking with configurable ring buffer size and optimized quickselect algorithm
 - [ ] **Synchronize the replicas and distribute the load-generation across each pod**
+- [ ] **Allow stopping the load test(s) upon reaching configurable failure threshold(s)**
 - [ ] **Unified Service Endpoint**: Create master service that accepts single configuration and forwards to all replicated pods
 - [ ] **Enhanced Metrics System**: Implement comprehensive metrics collection including system resources (CPU, memory, goroutines), NATS-specific metrics (connection health, bytes in/out), JetStream performance (storage usage, cluster status), throughput trends, error categorization, and test progress tracking. Add Prometheus export, real-time WebSocket streaming, and comparative analysis capabilities for production-grade observability.
