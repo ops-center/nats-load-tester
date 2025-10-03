@@ -26,7 +26,7 @@ data:
               ],
               "messages_per_stream_per_second": 10000000,
               "retention": "limits",
-              "max_age": "2m",
+              "max_age": "10m",
               "storage": "file",
               "discard_new_per_subject": false,
               "discard": "old",
@@ -47,17 +47,17 @@ data:
           },
           "consumers": {
             "stream_name_prefix": "load_stream",
-            "type": "push",
+            "type": "pull",
             "count_per_stream": 50,
             "durable_name_prefix": "load_consumer",
             "ack_wait_seconds": 5,
-            "max_ack_pending": 1000,
-            "consume_delay_ms": 500,
+            "max_ack_pending": -1,
+            "consume_delay_ms": 10,
             "ack_policy": "explicit"
           },
           "behavior": {
-            "duration_seconds": 30,
-            "ramp_up_seconds": 0
+            "duration_seconds": 1800,
+            "ramp_up_seconds": 60
           },
           "log_limits": {
             "max_lines": 50,
@@ -83,8 +83,8 @@ data:
           "count_per_stream_multiplier": 1
         },
         "publishers": {
-          "count_per_stream_multiplier": 1.2,
-          "publish_rate_multiplier": 2,
+          "count_per_stream_multiplier": 2,
+          "publish_rate_multiplier": 1.5,
           "message_size_bytes_multiplier": 1
         }
       },

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -80,7 +81,9 @@ func (m *manager) Start(ctx context.Context) error {
 
 	go func() {
 		err := m.eg.Wait()
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, context.Canceled) &&
+			!errors.Is(err, http.ErrServerClosed) &&
+			!errors.Is(err, context.DeadlineExceeded) {
 			m.doneCh <- err
 			return
 		}
@@ -243,14 +246,20 @@ func (m *manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 				}
 				return nil
 			}
-			if err != nil {
-				m.logger.Error("failed to process repeat load test spec", zap.Error(err))
-			}
 
-			m.logger.Info("Repeat spec completed",
-				zap.Int("iteration", repeatCount),
-				zap.String("name", lastLoadTest.Name),
-			)
+			if err != nil {
+				m.logger.Error(
+					"Failed to process repeat load test spec",
+					zap.Int("iteration", repeatCount),
+					zap.String("name", lastLoadTest.Name),
+					zap.Error(err),
+				)
+			} else {
+				m.logger.Info("Repeat spec completed",
+					zap.Int("iteration", repeatCount),
+					zap.String("name", lastLoadTest.Name),
+				)
+			}
 
 			repeatCount++
 		}

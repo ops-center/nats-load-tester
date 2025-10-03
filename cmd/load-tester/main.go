@@ -65,7 +65,6 @@ func run(args *cliArgs) error {
 		return fmt.Errorf("args cannot be nil")
 	}
 
-	// Validate mode argument
 	validModes := map[string]bool{
 		"publish": true,
 		"consume": true,

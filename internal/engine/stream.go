@@ -77,10 +77,6 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 					return nil
 				}
 
-				sm.logger.Warn("CreateOrUpdateStream failed, attempting delete and recreate",
-					zap.String("name", streamName),
-					zap.Error(err))
-
 				if delErr := sm.js.DeleteStream(ctx, streamName); delErr != nil && !errors.Is(delErr, jetstream.ErrStreamNotFound) {
 					return fmt.Errorf("failed to delete stream %s: %w", streamName, delErr)
 				}
@@ -90,7 +86,6 @@ func (sm *StreamManager) SetupStreams(ctx context.Context, loadTestSpec *config.
 					return fmt.Errorf("failed to recreate stream %s: %w", streamName, createErr)
 				}
 
-				sm.logger.Warn("Deleted and recreated stream", zap.String("name", streamName))
 				return nil
 			}); err != nil {
 				return err
@@ -113,8 +108,6 @@ func (sm *StreamManager) CleanupStreams(cleanupCtx context.Context, loadTestSpec
 			err := sm.js.DeleteStream(cleanupCtx, streamName)
 			if err != nil && err != jetstream.ErrStreamNotFound {
 				sm.logger.Warn("Failed to delete stream", zap.String("name", streamName), zap.Error(err))
-			} else if err == nil {
-				sm.logger.Info("Deleted stream", zap.String("name", streamName))
 			}
 		}
 	}

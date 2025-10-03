@@ -396,10 +396,6 @@ func (c *ConsumerConfig) Validate() error {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("ack_wait_seconds must be non-negative, got %d", c.AckWaitSeconds))
 	}
 
-	if c.MaxAckPending < 0 {
-		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("max_ack_pending must be non-negative, got %d", c.MaxAckPending))
-	}
-
 	if c.AckPolicy == "" {
 		consumerValidationErrors = append(consumerValidationErrors, fmt.Errorf("ack_policy required"))
 	}

@@ -192,29 +192,19 @@ func (c *Consumer) handleNatsJetstreamMessage(ctx context.Context, msg jetstream
 
 	c.processMessage(ctx, msg.Data())
 
-	if c.stopped.Load() {
-		return
-	}
-
 	if c.config.AckPolicy != "none" {
 		if err := exponentialBackoff(ctx, AckRetryInitialDelayMs*time.Millisecond, AckRetryBackoffFactor, AckRetryMaxAttempts, AckRetryMaxDelayMs*time.Millisecond, func() error {
 			return c.circuitBreaker.call(msg.Ack)
 		}); errors.Is(err, errCircuitOpen) {
 			c.logger.Warn("Circuit breaker is open, skipping ack", zap.String("id", c.config.ID))
 			return
-		} else if err != nil && !c.stopped.Load() {
-			c.logger.Error("Failed to ack message after retries, sending NAK", zap.Error(err))
+		} else if err != nil {
 			c.statsCollector.RecordConsumeError(err)
-
 			if nakErr := msg.Nak(); nakErr != nil {
 				c.logger.Error("Failed to NAK message", zap.Error(nakErr))
 			}
 			return
 		}
-	}
-
-	if c.stopped.Load() {
-		return
 	}
 
 	c.statsCollector.RecordConsume()
@@ -237,6 +227,9 @@ func (c *Consumer) processMessage(ctx context.Context, data []byte) {
 }
 
 func (c *Consumer) Cleanup() error {
+	if c == nil {
+		return nil
+	}
 	if !c.stopped.CompareAndSwap(false, true) {
 		return nil
 	}
@@ -268,7 +261,10 @@ func (c *Consumer) Cleanup() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := c.js.DeleteConsumer(ctx, c.config.StreamName, c.config.DurableName); err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) {
+		if err := c.js.DeleteConsumer(ctx, c.config.StreamName, c.config.DurableName); err != nil &&
+			!errors.Is(err, jetstream.ErrConsumerNotFound) &&
+			!errors.Is(err, context.Canceled) &&
+			!errors.Is(err, context.DeadlineExceeded) {
 			errs = append(errs, fmt.Errorf("failed to delete consumer: %w", err))
 		}
 	}

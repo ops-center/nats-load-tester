@@ -20,8 +20,69 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
+
+var errCircuitOpen = errors.New("circuit breaker is open")
+
+type circuitBreaker interface {
+	call(fn func() error) error
+	isOpen() bool
+	reset()
+}
+
+type simpleCircuitBreaker struct {
+	failures     atomic.Int32
+	lastFailure  atomic.Int64
+	isOpenFlag   atomic.Bool
+	maxFailures  int32
+	resetTimeout time.Duration
+}
+
+func newCircuitBreaker(maxFailures int, resetTimeout time.Duration) circuitBreaker {
+	return &simpleCircuitBreaker{
+		maxFailures:  int32(maxFailures),
+		resetTimeout: resetTimeout,
+	}
+}
+
+// call executes the provided function if the circuit breaker is closed.
+// If the circuit breaker is open, it returns an error without executing the function.
+// If the function returns an error, it increments the failure count and may open the circuit.
+// If the function succeeds, it resets the failure count and closes the circuit.
+func (cb *simpleCircuitBreaker) call(fn func() error) error {
+	if cb.isOpenFlag.Load() {
+		if time.Since(time.Unix(0, cb.lastFailure.Load())) <= cb.resetTimeout {
+			return errCircuitOpen
+		}
+		cb.reset()
+	}
+
+	err := fn()
+
+	if err != nil {
+		cb.failures.Add(1)
+		cb.lastFailure.Store(time.Now().UnixNano())
+		if cb.failures.Load() >= cb.maxFailures {
+			cb.isOpenFlag.Store(true)
+		}
+	} else {
+		cb.failures.Store(0)
+		cb.isOpenFlag.Store(false)
+	}
+
+	return err
+}
+
+func (cb *simpleCircuitBreaker) isOpen() bool {
+	return cb.isOpenFlag.Load()
+}
+
+func (cb *simpleCircuitBreaker) reset() {
+	cb.failures.Store(0)
+	cb.isOpenFlag.Store(false)
+}
 
 // a simplified and modified knockoff of 'ExponentialBackoff' from k8s.io/apimachinery/pkg/util/wait.
 // retries fn() until it returns a nil error, or the max number of steps is reached
@@ -45,7 +106,7 @@ func exponentialBackoff(ctx context.Context, duration time.Duration, factor floa
 	for i := range steps {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil
 		default:
 		}
 
