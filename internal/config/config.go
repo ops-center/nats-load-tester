@@ -320,7 +320,7 @@ func (s *StreamSpec) Validate() error {
 		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_msgs must be -1 (unlimited) or non-negative, got %d", *s.MaxMsgs))
 	}
 
-	if s.MaxBytes != nil && *s.MaxBytes < 0 {
+	if s.MaxBytes != nil && *s.MaxBytes < -1 {
 		streamValidationErrors = append(streamValidationErrors, fmt.Errorf("max_bytes must be -1 (unlimited) or non-negative, got %d", *s.MaxBytes))
 	}
 
