@@ -19,7 +19,6 @@ package engine
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -46,20 +45,19 @@ type PublisherConfig struct {
 }
 
 type Publisher struct {
-	nc             *nats.Conn
-	js             jetstream.JetStream
-	config         PublisherConfig
-	statsRecorder  statsCollector
-	logger         *zap.Logger
-	messageData    []byte
-	currentRate    atomic.Int64
-	targetRate     int64
-	stopped        atomic.Bool
-	circuitBreaker circuitBreaker
-	bufferPool     *sync.Pool
+	nc            *nats.Conn
+	js            jetstream.JetStream
+	config        PublisherConfig
+	statsRecorder statsCollector
+	logger        *zap.Logger
+	messageData   []byte
+	currentRate   atomic.Int64
+	targetRate    int64
+	stopped       atomic.Bool
+	bufferPool    *sync.Pool
 }
 
-func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, statsCollector statsCollector, logger *zap.Logger, cb circuitBreaker) PublisherInterface {
+func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, statsCollector statsCollector, logger *zap.Logger) PublisherInterface {
 	messageData := make([]byte, cfg.MessageSize)
 	if cfg.MessageSize > 8 {
 		for i := int32(8); i < cfg.MessageSize; i++ {
@@ -75,16 +73,15 @@ func NewPublisher(nc *nats.Conn, js jetstream.JetStream, cfg PublisherConfig, st
 	}
 
 	return &Publisher{
-		nc:             nc,
-		js:             js,
-		config:         cfg,
-		statsRecorder:  statsCollector,
-		logger:         logger,
-		messageData:    messageData,
-		currentRate:    atomic.Int64{},
-		targetRate:     cfg.PublishRate,
-		circuitBreaker: cb,
-		bufferPool:     bufferPool,
+		nc:            nc,
+		js:            js,
+		config:        cfg,
+		statsRecorder: statsCollector,
+		logger:        logger,
+		messageData:   messageData,
+		currentRate:   atomic.Int64{},
+		targetRate:    cfg.PublishRate,
+		bufferPool:    bufferPool,
 	}
 }
 
@@ -110,25 +107,18 @@ func (p *Publisher) Start(ctx context.Context) error {
 			return nil
 
 		case <-ticker.C:
+			if p.stopped.Load() {
+				return nil
+			}
+
 			for range p.config.PublishBurstSize {
-				if p.stopped.Load() {
-					return nil
-				}
-				if err := p.circuitBreaker.call(func() error {
-					return p.publishMessage(ctx)
-				}); err != nil {
-					if errors.Is(err, errCircuitOpen) {
-						continue
-					}
+				if err := p.publishMessage(ctx); err != nil {
 					p.statsRecorder.RecordPublishError(err)
 				} else {
 					p.statsRecorder.RecordPublish()
 				}
 			}
 
-			if p.stopped.Load() {
-				return nil
-			}
 			if currentRate := p.GetCurrentRate(); currentRate != lastRate {
 				lastRate = currentRate
 				if err := p.updateTicker(ticker, currentRate); err != nil {
@@ -243,7 +233,7 @@ func (p *Publisher) Cleanup() {
 }
 
 // CreatePublishers creates and starts publishers based on the load test spec and stream configurations
-func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group, cb circuitBreaker) []PublisherInterface {
+func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) []PublisherInterface {
 	publishers := make([]PublisherInterface, 0)
 	totalTargetRate := int64(0)
 
@@ -271,7 +261,7 @@ func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 						UseJetStream:     loadTestSpec.UseJetStream,
 					}
 
-					publisher := NewPublisher(nc, js, pubCfg, statsCollector, logger, cb)
+					publisher := NewPublisher(nc, js, pubCfg, statsCollector, logger)
 					publishers = append(publishers, publisher)
 					totalTargetRate += publisher.GetTargetRate()
 

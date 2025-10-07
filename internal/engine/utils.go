@@ -20,86 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"time"
-
-	"go.uber.org/zap"
 )
-
-var errCircuitOpen = errors.New("circuit breaker is open")
-
-const (
-	closeDebounce = 2 * time.Second
-)
-
-type circuitBreaker interface {
-	call(fn func() error) error
-	forceReset()
-}
-
-type simpleCircuitBreaker struct {
-	name         string
-	failures     atomic.Int32
-	logger       *zap.Logger
-	lastOpenTime atomic.Int64
-	lastFailure  atomic.Int64
-	isOpenFlag   atomic.Bool
-	maxFailures  int32
-	resetTimeout time.Duration
-}
-
-func newCircuitBreaker(name string, maxFailures int, resetTimeout time.Duration, logger *zap.Logger) circuitBreaker {
-	return &simpleCircuitBreaker{
-		name:         name,
-		maxFailures:  int32(maxFailures),
-		resetTimeout: resetTimeout,
-		logger:       logger,
-	}
-}
-
-// call executes the provided function if the circuit breaker is closed.
-// If the circuit breaker is open, it returns an error without executing the function.
-// If the function returns an error, it increments the failure count and may open the circuit.
-// If the function succeeds, it resets the failure count and closes the circuit.
-func (cb *simpleCircuitBreaker) call(fn func() error) error {
-	if cb.isOpenFlag.Load() && !cb.tryReset() {
-		return fmt.Errorf("'%s' %w", cb.name, errCircuitOpen)
-	}
-
-	if err := fn(); err != nil {
-		cb.failures.Add(1)
-		cb.lastFailure.Store(time.Now().UnixNano())
-		if cb.failures.Load() >= cb.maxFailures && cb.isOpenFlag.CompareAndSwap(false, true) {
-			cb.lastOpenTime.Store(time.Now().UnixNano())
-			cb.logger.Warn(cb.name+" circuit breaker opened", zap.Int32("failures", cb.failures.Load()), zap.NamedError("last error", err))
-		}
-		return fmt.Errorf("'%s' operation failed: %w", cb.name, err)
-	}
-
-	if time.Since(time.Unix(0, cb.lastOpenTime.Load())) < closeDebounce {
-		return nil
-	}
-
-	cb.failures.Store(0)
-	if cb.tryReset() {
-		cb.logger.Info(cb.name + " circuit breaker closed")
-	}
-
-	return nil
-}
-
-func (cb *simpleCircuitBreaker) tryReset() bool {
-	if time.Since(time.Unix(0, cb.lastOpenTime.Load())) > cb.resetTimeout && cb.isOpenFlag.CompareAndSwap(true, false) {
-		cb.failures.Store(0)
-		return true
-	}
-	return false
-}
-
-func (cb *simpleCircuitBreaker) forceReset() {
-	cb.failures.Store(0)
-	cb.isOpenFlag.Store(false)
-}
 
 // a simplified and modified knockoff of 'ExponentialBackoff' from k8s.io/apimachinery/pkg/util/wait.
 // retries fn() until it returns a nil error, or the max number of steps is reached

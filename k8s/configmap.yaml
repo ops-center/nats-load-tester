@@ -11,7 +11,7 @@ data:
     {
       "load_test_specs": [
         {
-          "name": "simple_high_throughput",
+          "name": "Trigger NatsJetStreamConsumerStalled",
           "nats_url": "${NATS_URL}",
           "nats_creds_file": "${NATS_CREDS_MOUNT_PATH}/admin.creds",
           "use_jetstream": true,
@@ -24,41 +24,41 @@ data:
               "subjects": [
                 "test.subject.{}"
               ],
-              "messages_per_stream_per_second": 10000000,
+              "messages_per_stream_per_second": 100000000,
               "retention": "limits",
               "max_age": "5m",
               "storage": "file",
               "discard_new_per_subject": false,
               "discard": "old",
-              "max_msgs": 100000000,
-              "max_bytes": 29999999,
-              "max_consumers": 1000000,
-              "max_msgs_per_subject": 1000000
+              "max_msgs": 10000000000,
+              "max_bytes": 299999999,
+              "max_consumers": 100000000,
+              "max_msgs_per_subject": 100000000
             }
           ],
           "publishers": {
             "count_per_stream": 50,
             "stream_name_prefix": "load_stream",
-            "publish_rate_per_second": 20000,
+            "publish_rate_per_second": 200000,
             "publish_pattern": "steady",
             "publish_burst_size": 10,
             "message_size_bytes": 1024,
-            "track_latency": true
+            "track_latency": false
           },
           "consumers": {
             "stream_name_prefix": "load_stream",
             "type": "push",
-            "count_per_stream": 50,
+            "count_per_stream": 10,
             "durable_name_prefix": "load_consumer",
-            "ack_wait_seconds": 5,
-            "max_ack_pending": -1,
-            "consume_delay_ms": 0,
+            "ack_wait_seconds": 30,
+            "max_ack_pending": 10,
+            "consume_delay_ms": 5000,
             "ack_policy": "explicit",
             "pull_max_messages": 100
           },
           "behavior": {
-            "duration_seconds": 18000,
-            "ramp_up_seconds": 1800
+            "duration_seconds": 1800,
+            "ramp_up_seconds": 180
           },
           "log_limits": {
             "max_lines": 100,
@@ -90,8 +90,8 @@ data:
         }
       },
       "storage": {
-        "type": "badger",
-        "path": "/var/lib/lt/load_test_stats.db"
+        "type": "file",
+        "path": "./load_test_stats.log"
       },
       "stats_collection_interval_seconds": 5
     }

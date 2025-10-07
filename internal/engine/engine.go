@@ -51,13 +51,11 @@ type Engine struct {
 	loadTestSpec     *config.LoadTestSpec
 	rampUpController RampUpControllerInterface
 
-	enablePublishers      bool
-	publishCircuitBreaker circuitBreaker
-	publishers            []PublisherInterface
+	enablePublishers bool
+	publishers       []PublisherInterface
 
-	enableConsumers       bool
-	consumeCircuitBreaker circuitBreaker
-	consumers             []ConsumerInterface
+	enableConsumers bool
+	consumers       []ConsumerInterface
 }
 
 func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublishers, enableConsumers bool) *Engine {
@@ -68,14 +66,12 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublis
 			b.Store(true)
 			return &b
 		}(),
-		statsCollector:        statsCollector,
-		enablePublishers:      enablePublishers,
-		enableConsumers:       enableConsumers,
-		publishers:            make([]PublisherInterface, 0),
-		consumers:             make([]ConsumerInterface, 0),
-		natsJetStreamContext:  nil,
-		publishCircuitBreaker: newCircuitBreaker("publisher", 5, 15*time.Second, logger),
-		consumeCircuitBreaker: newCircuitBreaker("consumer", 5, 15*time.Second, logger),
+		statsCollector:       statsCollector,
+		enablePublishers:     enablePublishers,
+		enableConsumers:      enableConsumers,
+		publishers:           make([]PublisherInterface, 0),
+		consumers:            make([]ConsumerInterface, 0),
+		natsJetStreamContext: nil,
 	}
 }
 
@@ -133,7 +129,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	var err error
 	if e.enableConsumers {
 		e.logger.Info("Creating consumers for load test spec", zap.String("name", loadTestSpec.Name))
-		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.consumeCircuitBreaker)
+		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
 		if err != nil {
 			e.cleanup(engineCleanupTimeout)
 			e.logger.Error("Failed to start consumers", zap.Error(err))
@@ -143,7 +139,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 
 	if e.enablePublishers {
 		e.logger.Info("Creating publishers for load test spec", zap.String("name", loadTestSpec.Name))
-		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.publishCircuitBreaker)
+		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
 	}
 
 	e.errGroup.Go(func() error {
@@ -181,7 +177,7 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 	opts := []nats.Option{
 		nats.Name(loadTestSpec.ClientIDPrefix + "-engine"),
 		nats.RetryOnFailedConnect(true),
-		nats.ReconnectBufSize(100 * 1024 * 1024), // 100MB
+		nats.ReconnectBufSize(1 * 1024 * 1024), // 1MB
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
@@ -210,7 +206,7 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 	if loadTestSpec.UseJetStream {
 		js, err := jetstream.New(
 			e.natsConn,
-			jetstream.WithPublishAsyncMaxPending(16384),
+			jetstream.WithPublishAsyncMaxPending(512),
 		)
 		if err != nil {
 			nc.Close()
@@ -268,8 +264,6 @@ func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 		e.natsConn.Close()
 	}
 
-	e.publishCircuitBreaker.forceReset()
-	e.consumeCircuitBreaker.forceReset()
 	e.natsJetStreamContext = nil
 	e.natsConn = nil
 	e.loadTestSpec = nil
