@@ -358,7 +358,6 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 							consumer = NewConsumer(nc, js, consCfg, statsCollector, logger, cb)
 							if startErr := consumer.Start(ctx); startErr != nil {
 								if err := consumer.Cleanup(); err != nil {
-									logger.Error("consumer cleanup failed after start error", zap.String("id", consCfg.ID), zap.Error(err))
 									return err
 								}
 								return startErr
@@ -367,7 +366,6 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 						}); err != nil {
 							failedConsumerStart.Add(1)
 							statsCollector.RecordError(err)
-							logger.Error("consumer failed to start", zap.String("id", consCfg.ID), zap.Error(err))
 							return
 						}
 
