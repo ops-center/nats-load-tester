@@ -382,7 +382,6 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 							}
 							return nil
 						})
-						return
 					})
 				}
 			}
