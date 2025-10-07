@@ -319,6 +319,7 @@ func (c *Consumer) GetSubject() string {
 
 // CreateConsumers creates and starts consumers based on the load test spec and stream configurations
 func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamConsumerManager, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group, cb circuitBreaker) ([]ConsumerInterface, error) {
+	consumerSliceMu := sync.Mutex{}
 	consumers := make([]ConsumerInterface, 0)
 	consumerStartErrGroup := errgroup.Group{}
 
@@ -369,7 +370,9 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 							return fmt.Errorf("consumer %s failed: %w", consumer.GetID(), err)
 						}
 
+						consumerSliceMu.Lock()
 						consumers = append(consumers, consumer)
+						consumerSliceMu.Unlock()
 
 						eg.Go(func() error {
 							<-ctx.Done()
