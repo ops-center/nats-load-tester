@@ -191,6 +191,12 @@ func (m *manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 		engineCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
+		defer func() {
+			if err := engine.Stop(ctx); err != nil {
+				m.logger.Error("engine wait failed", zap.Error(err))
+			}
+		}()
+
 		if err := engine.Start(engineCtx, spec, cfg.StatsInterval()); err != nil {
 			return false, fmt.Errorf("failed to start engine: %w", err)
 		}
@@ -200,10 +206,6 @@ func (m *manager) processConfig(ctx context.Context, cfg *config.Config, engine 
 			return true, nil
 		case <-time.After(spec.Duration()):
 			m.logger.Info(specName+" spec completed", zap.String("name", spec.Name))
-		}
-
-		if err := engine.Stop(ctx); err != nil {
-			m.logger.Error("engine wait failed", zap.Error(err))
 		}
 		return false, nil
 	}
