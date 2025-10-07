@@ -49,18 +49,6 @@ spec:
         - "--port=9481"
         - "--mode=both"
         - "--enable-pprof=true"
-        readinessProbe:
-          httpGet:
-            path: /healthcheck
-            port: http
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        livenessProbe:
-          httpGet:
-            path: /healthcheck
-            port: http
-          initialDelaySeconds: 15
-          periodSeconds: 20
       volumes:
         - name: config
           configMap:

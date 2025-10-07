@@ -80,9 +80,6 @@ func (h *HTTPServer) Start(ctx context.Context) error {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(RequestTimeoutSeconds * time.Second))
 
-	// Healthcheck endpoint without logging
-	r.Get("/healthcheck", h.handleCheckHealth)
-
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Logger)
 
@@ -91,6 +88,7 @@ func (h *HTTPServer) Start(ctx context.Context) error {
 			r.Post("/config", h.handleConfigUpdate)
 		})
 
+		r.Get("/healthcheck", h.handleCheckHealth)
 		r.Get("/config", h.handleConfigGet)
 		r.Get("/stats", h.handleGetStatsHistory)
 	})
