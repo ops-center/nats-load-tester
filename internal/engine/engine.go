@@ -81,6 +81,7 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublis
 
 func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, statsInterval time.Duration) error {
 	if !e.stopped.CompareAndSwap(true, false) {
+		e.logger.Warn("Start() called, but engine is already running")
 		return nil
 	}
 	e.mu.Lock()
@@ -129,11 +130,6 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 		}
 	}
 
-	if e.enablePublishers {
-		e.logger.Info("Creating publishers for load test spec", zap.String("name", loadTestSpec.Name))
-		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.publishCircuitBreaker)
-	}
-
 	var err error
 	if e.enableConsumers {
 		e.logger.Info("Creating consumers for load test spec", zap.String("name", loadTestSpec.Name))
@@ -143,6 +139,11 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 			e.logger.Error("Failed to start consumers", zap.Error(err))
 			return fmt.Errorf("failed to start consumers: %w", err)
 		}
+	}
+
+	if e.enablePublishers {
+		e.logger.Info("Creating publishers for load test spec", zap.String("name", loadTestSpec.Name))
+		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup, e.publishCircuitBreaker)
 	}
 
 	e.errGroup.Go(func() error {
