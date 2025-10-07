@@ -120,9 +120,6 @@ func (p *Publisher) Start(ctx context.Context) error {
 					if errors.Is(err, errCircuitOpen) {
 						continue
 					}
-					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-						return nil
-					}
 					p.statsRecorder.RecordPublishError(err)
 				} else {
 					p.statsRecorder.RecordPublish()
