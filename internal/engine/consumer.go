@@ -363,9 +363,7 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 								return startErr
 							}
 							return nil
-						}); errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-							return nil
-						} else if err != nil {
+						}); err != nil {
 							statsCollector.RecordError(err)
 							return fmt.Errorf("consumer %s failed: %w", consumer.GetID(), err)
 						}

@@ -39,7 +39,7 @@ data:
           "publishers": {
             "count_per_stream": 50,
             "stream_name_prefix": "load_stream",
-            "publish_rate_per_second": 1000,
+            "publish_rate_per_second": 20000,
             "publish_pattern": "steady",
             "publish_burst_size": 10,
             "message_size_bytes": 1024,
@@ -57,8 +57,8 @@ data:
             "pull_max_messages": 100
           },
           "behavior": {
-            "duration_seconds": 60,
-            "ramp_up_seconds": 30
+            "duration_seconds": 18000,
+            "ramp_up_seconds": 1800
           },
           "log_limits": {
             "max_lines": 100,
