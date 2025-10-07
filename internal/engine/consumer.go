@@ -321,7 +321,8 @@ func (c *Consumer) GetSubject() string {
 func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamConsumerManager, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group, cb circuitBreaker) ([]ConsumerInterface, error) {
 	consumerSliceMu := sync.Mutex{}
 	consumers := make([]ConsumerInterface, 0)
-	consumerStartErrGroup := errgroup.Group{}
+	failedConsumerStart := atomic.Int32{}
+	consumerStartErrGroup := sync.WaitGroup{}
 
 	for _, streamSpec := range loadTestSpec.Streams {
 		// Only create consumers for streams that match the consumer's stream name prefix
@@ -350,7 +351,7 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 						PullMaxMessages: int(loadTestSpec.Consumers.PullMaxMessages),
 					}
 
-					consumerStartErrGroup.Go(func() error {
+					consumerStartErrGroup.Go(func() {
 						var consumer ConsumerInterface
 
 						if err := exponentialBackoff(ctx, ConsumerStartRetryDelaySeconds*time.Second, ConsumerStartRetryFactor, ConsumerStartMaxAttempts, ConsumerStartMaxDelaySeconds*time.Second, func() error {
@@ -364,8 +365,10 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 							}
 							return nil
 						}); err != nil {
+							failedConsumerStart.Add(1)
 							statsCollector.RecordError(err)
-							return fmt.Errorf("consumer %s failed: %w", consumer.GetID(), err)
+							logger.Error("consumer failed to start", zap.String("id", consCfg.ID), zap.Error(err))
+							return
 						}
 
 						consumerSliceMu.Lock()
@@ -379,19 +382,23 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 							}
 							return nil
 						})
-						return nil
+						return
 					})
 				}
 			}
 		}
 	}
 
-	if err := consumerStartErrGroup.Wait(); err != nil {
-		logger.Error("one or more consumers failed to start", zap.Error(err))
-		return consumers, fmt.Errorf("one or more consumers failed to start: %w", err)
+	consumerStartErrGroup.Wait()
+
+	if failedConsumerStart.Load() > 0 {
+		if len(consumers) == 0 {
+			return nil, fmt.Errorf("all consumers failed to start")
+		}
+		logger.Warn("Some consumers failed to start", zap.Int32("failed_count", failedConsumerStart.Load()), zap.Int("successful_count", len(consumers)))
+		return consumers, nil
 	}
 
 	logger.Info("All consumers started", zap.Int("count", len(consumers)))
-
 	return consumers, nil
 }
