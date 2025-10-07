@@ -105,12 +105,12 @@ func (c *Collector) SetConfig(loadTestSpec *config.LoadTestSpec) error {
 	if c == nil {
 		return fmt.Errorf("collector is nil or stopped")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if loadTestSpec == nil {
 		return fmt.Errorf("load test spec is nil")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.currentLoadTestSpecHash = loadTestSpec.Hash()
 	c.loadTestSpec = loadTestSpec
 

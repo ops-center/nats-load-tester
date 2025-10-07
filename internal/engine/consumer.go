@@ -69,17 +69,15 @@ type Consumer struct {
 	subscription            *nats.Subscription
 	jetstreamConsumeContext jetstream.ConsumeContext
 	stopped                 atomic.Bool
-	circuitBreaker          circuitBreaker
 }
 
-func NewConsumer(nc *nats.Conn, js jetstream.StreamConsumerManager, cfg ConsumerConfig, stats statsCollector, logger *zap.Logger, cb circuitBreaker) ConsumerInterface {
+func NewConsumer(nc *nats.Conn, js jetstream.StreamConsumerManager, cfg ConsumerConfig, stats statsCollector, logger *zap.Logger) ConsumerInterface {
 	return &Consumer{
 		nc:             nc,
 		js:             js,
 		config:         cfg,
 		statsCollector: stats,
 		logger:         logger,
-		circuitBreaker: cb,
 	}
 }
 
@@ -141,13 +139,8 @@ func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
 		return nil
 
 	case config.ConsumerTypePull:
-		var pullConsumer jetstream.Consumer
-		var err error
-		if err := c.circuitBreaker.call(func() error {
-			var err error
-			pullConsumer, err = c.js.CreateOrUpdateConsumer(ctx, c.config.StreamName, consumerConfig)
-			return err
-		}); err != nil {
+		pullConsumer, err := c.js.CreateOrUpdateConsumer(ctx, c.config.StreamName, consumerConfig)
+		if err != nil {
 			c.statsCollector.RecordError(err)
 			return fmt.Errorf("failed to create pull consumer: %w", err)
 		}
@@ -215,6 +208,7 @@ func (c *Consumer) handleNatsJetstreamMessage(ctx context.Context, msg jetstream
 	}
 
 	c.processMessage(ctx, msg.Data())
+	c.statsCollector.RecordConsume()
 
 	if c.config.AckPolicy != "none" {
 		if err := exponentialBackoff(
@@ -223,17 +217,15 @@ func (c *Consumer) handleNatsJetstreamMessage(ctx context.Context, msg jetstream
 			AckRetryBackoffFactor,
 			AckRetryMaxAttempts,
 			AckRetryMaxDelayMs*time.Millisecond,
-			func() error { return c.circuitBreaker.call(msg.Ack) },
+			msg.Ack,
 		); err != nil {
 			c.statsCollector.RecordConsumeError(fmt.Errorf("failed to ACK message: %w", err))
-			if nakErr := msg.Nak(); nakErr != nil {
-				c.statsCollector.RecordConsumeError(fmt.Errorf("failed to NAK message after ACK failure: %w", nakErr))
+			if err := msg.Term(); err != nil {
+				c.statsCollector.RecordError(fmt.Errorf("failed to terminate message: %w", err))
 			}
 			return
 		}
 	}
-
-	c.statsCollector.RecordConsume()
 }
 
 func (c *Consumer) processMessage(ctx context.Context, data []byte) {
@@ -284,10 +276,7 @@ func (c *Consumer) Cleanup() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := c.js.DeleteConsumer(ctx, c.config.StreamName, c.config.DurableName); err != nil &&
-			!errors.Is(err, jetstream.ErrConsumerNotFound) &&
-			!errors.Is(err, context.Canceled) &&
-			!errors.Is(err, context.DeadlineExceeded) {
+		if err := c.js.DeleteConsumer(ctx, c.config.StreamName, c.config.DurableName); err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) {
 			errs = append(errs, fmt.Errorf("failed to delete consumer: %w", err))
 		}
 	}
@@ -318,11 +307,11 @@ func (c *Consumer) GetSubject() string {
 }
 
 // CreateConsumers creates and starts consumers based on the load test spec and stream configurations
-func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamConsumerManager, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group, cb circuitBreaker) ([]ConsumerInterface, error) {
+func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamConsumerManager, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) ([]ConsumerInterface, error) {
 	consumerSliceMu := sync.Mutex{}
 	consumers := make([]ConsumerInterface, 0)
 	failedConsumerStart := atomic.Int32{}
-	consumerStartErrGroup := sync.WaitGroup{}
+	consumerStartWaitGroup := sync.WaitGroup{}
 
 	for _, streamSpec := range loadTestSpec.Streams {
 		// Only create consumers for streams that match the consumer's stream name prefix
@@ -351,11 +340,11 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 						PullMaxMessages: int(loadTestSpec.Consumers.PullMaxMessages),
 					}
 
-					consumerStartErrGroup.Go(func() {
+					consumerStartWaitGroup.Go(func() {
 						var consumer ConsumerInterface
 
 						if err := exponentialBackoff(ctx, ConsumerStartRetryDelaySeconds*time.Second, ConsumerStartRetryFactor, ConsumerStartMaxAttempts, ConsumerStartMaxDelaySeconds*time.Second, func() error {
-							consumer = NewConsumer(nc, js, consCfg, statsCollector, logger, cb)
+							consumer = NewConsumer(nc, js, consCfg, statsCollector, logger)
 							if startErr := consumer.Start(ctx); startErr != nil {
 								if err := consumer.Cleanup(); err != nil {
 									return err
@@ -386,7 +375,7 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 		}
 	}
 
-	consumerStartErrGroup.Wait()
+	consumerStartWaitGroup.Wait()
 
 	if failedConsumerStart.Load() > 0 {
 		if len(consumers) == 0 {
