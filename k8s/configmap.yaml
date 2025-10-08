@@ -37,23 +37,25 @@ data:
             }
           ],
           "publishers": {
-            "count_per_stream": 50,
+            "count_per_stream": 100,
             "stream_name_prefix": "load_stream",
-            "publish_rate_per_second": 200000,
+            "publish_rate_per_second": 500,
             "publish_pattern": "steady",
             "publish_burst_size": 10,
             "message_size_bytes": 1024,
             "track_latency": false
           },
           "consumers": {
+            "start" : false,
             "stream_name_prefix": "load_stream",
             "type": "push",
-            "count_per_stream": 10,
+            "count_per_stream": 20,
             "durable_name_prefix": "load_consumer",
-            "ack_wait_seconds": 30,
-            "max_ack_pending": 10,
-            "consume_delay_ms": 5000,
+            "ack_wait_seconds": 10,
+            "max_ack_pending": 1,
+            "consume_delay_ms": 0,
             "ack_policy": "explicit",
+            "acknowledge_messages": true,
             "pull_max_messages": 100
           },
           "behavior": {

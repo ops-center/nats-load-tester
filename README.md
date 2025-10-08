@@ -21,6 +21,7 @@ kubectl patch sts -n ace ace-nats -p '{"spec":{"replicas":3}}'
 ```
 
 ```bash
+export REGISTRY=<your-docker-repo>
 # Deploy to cluster
 make deploy
 ```
@@ -116,6 +117,7 @@ curl http://service-endpoint:9481/stats?limit=10
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
+| `start` | `bool` | - | `true` | Whether to start the consumer after creation (false = create but don't subscribe to messages) |
 | `stream_name_prefix` | `string` | ✓ | - | Source stream prefix to match |
 | `type` | `string` | ✓ | - | Consumer type: `push`, `pull` |
 | `count_per_stream` | `int32` | ✓ | - | Consumers per stream |
@@ -125,6 +127,7 @@ curl http://service-endpoint:9481/stats?limit=10
 | `consume_delay_ms` | `int64` | - | `0` | Artificial processing delay |
 | `ack_policy` | `string` | ✓ | - | Ack policy: `explicit`, `none`, `all` |
 | `pull_max_messages` | `int32` | - | `100` | Buffer size for pull consumers (messages to fetch per request) |
+| `acknowledge_messages` | `bool` | - | `true` | Whether to acknowledge messages after receiving them (false = receive but never ACK) |
 
 #### BehaviorConfig
 
@@ -197,6 +200,7 @@ curl http://service-endpoint:9481/stats?limit=10
         "track_latency": true
       },
       "consumers": {
+        "start": true,
         "stream_name_prefix": "load_stream",
         "type": "push",
         "count_per_stream": 75,
@@ -205,6 +209,7 @@ curl http://service-endpoint:9481/stats?limit=10
         "max_ack_pending": -1,
         "consume_delay_ms": 0,
         "ack_policy": "explicit",
+        "acknowledge_messages": true,
         "pull_max_messages": 100
       },
       "behavior": {

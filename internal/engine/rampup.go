@@ -40,6 +40,11 @@ func NewRampUpManager(logger *zap.Logger, statsCollector *stats.Collector) RampU
 
 // Start begins the ramp-up process
 func (rum *RampUpManager) Start(ctx context.Context, publishers []PublisherInterface, duration time.Duration) error {
+	if len(publishers) == 0 {
+		rum.logger.Info("No publishers to ramp up")
+		return nil
+	}
+
 	if duration == 0 {
 		rum.logger.Info("No ramp-up configured, starting at full rate")
 		rum.setAllPublishersToFullRate(publishers)

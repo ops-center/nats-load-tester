@@ -143,7 +143,7 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	}
 
 	e.errGroup.Go(func() error {
-		e.logger.Info("Starting ramp-up process", zap.Duration("duration", loadTestSpec.Duration()))
+		e.logger.Info("Starting ramp-up process", zap.Duration("duration", loadTestSpec.RampUpDuration()))
 		return e.rampUpController.Start(engineCtx, e.publishers, loadTestSpec.RampUpDuration())
 	})
 

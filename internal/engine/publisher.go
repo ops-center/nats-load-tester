@@ -234,6 +234,15 @@ func (p *Publisher) Cleanup() {
 
 // CreatePublishers creates and starts publishers based on the load test spec and stream configurations
 func CreatePublishers(ctx context.Context, nc *nats.Conn, js jetstream.JetStream, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) []PublisherInterface {
+	if loadTestSpec.Publishers.CountPerStream == 0 {
+		logger.Info("Skipping publisher creation as CountPerStream is 0")
+		return nil
+	}
+	if loadTestSpec.Publishers.PublishRatePerSecond == 0 {
+		logger.Info("Skipping publisher creation as PublishRatePerSecond is 0")
+		return nil
+	}
+
 	publishers := make([]PublisherInterface, 0)
 	totalTargetRate := int64(0)
 
