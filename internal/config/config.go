@@ -119,15 +119,17 @@ type PublisherConfig struct {
 }
 
 type ConsumerConfig struct {
-	StreamNamePrefix  string `json:"stream_name_prefix"`
-	Type              string `json:"type"`
-	CountPerStream    int32  `json:"count_per_stream"`
-	DurableNamePrefix string `json:"durable_name_prefix"`
-	AckWaitSeconds    int64  `json:"ack_wait_seconds"`
-	MaxAckPending     int32  `json:"max_ack_pending"`
-	ConsumeDelayMs    int64  `json:"consume_delay_ms"`
-	AckPolicy         string `json:"ack_policy"`
-	PullMaxMessages   int32  `json:"pull_max_messages"`
+	Start               bool   `json:"start"`
+	StreamNamePrefix    string `json:"stream_name_prefix"`
+	Type                string `json:"type"`
+	CountPerStream      int32  `json:"count_per_stream"`
+	DurableNamePrefix   string `json:"durable_name_prefix"`
+	AckWaitSeconds      int64  `json:"ack_wait_seconds"`
+	MaxAckPending       int32  `json:"max_ack_pending"`
+	ConsumeDelayMs      int64  `json:"consume_delay_ms"`
+	AckPolicy           string `json:"ack_policy"`
+	PullMaxMessages     int32  `json:"pull_max_messages"`
+	AcknowledgeMessages bool   `json:"acknowledge_messages"`
 }
 
 type BehaviorConfig struct {

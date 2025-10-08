@@ -44,18 +44,20 @@ const (
 )
 
 type ConsumerConfig struct {
-	ID              string
-	StreamName      string
-	DurableName     string
-	Type            string
-	AckWaitSeconds  int64
-	MaxAckPending   int
-	ConsumeDelayMs  int64
-	AckPolicy       string
-	UseJetStream    bool
-	Subject         string
-	TrackLatency    bool
-	PullMaxMessages int
+	ID                  string
+	StreamName          string
+	DurableName         string
+	Type                string
+	AckWaitSeconds      int64
+	MaxAckPending       int
+	ConsumeDelayMs      int64
+	AckPolicy           string
+	UseJetStream        bool
+	Subject             string
+	TrackLatency        bool
+	PullMaxMessages     int
+	Start               bool
+	AcknowledgeMessages bool
 }
 
 type Consumer struct {
@@ -117,6 +119,10 @@ func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
 			return fmt.Errorf("failed to create push consumer: %w", err)
 		}
 
+		if !c.config.Start {
+			return nil
+		}
+
 		consumeContext, err := pushConsumer.Consume(
 			func(msg jetstream.Msg) {
 				c.handleNatsJetstreamMessage(ctx, msg)
@@ -143,6 +149,10 @@ func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
 		if err != nil {
 			c.statsCollector.RecordError(err)
 			return fmt.Errorf("failed to create pull consumer: %w", err)
+		}
+
+		if !c.config.Start {
+			return nil
 		}
 
 		consumeContext, err := pullConsumer.Consume(
@@ -208,9 +218,8 @@ func (c *Consumer) handleNatsJetstreamMessage(ctx context.Context, msg jetstream
 	}
 
 	c.processMessage(ctx, msg.Data())
-	c.statsCollector.RecordConsume()
 
-	if c.config.AckPolicy != "none" {
+	if c.config.AckPolicy != "none" && c.config.AcknowledgeMessages {
 		if err := exponentialBackoff(
 			ctx,
 			AckRetryInitialDelayMs*time.Millisecond,
@@ -225,6 +234,9 @@ func (c *Consumer) handleNatsJetstreamMessage(ctx context.Context, msg jetstream
 			}
 			return
 		}
+		c.statsCollector.RecordConsume()
+	} else {
+		c.statsCollector.RecordConsume()
 	}
 }
 
@@ -248,9 +260,10 @@ func (c *Consumer) Cleanup() error {
 	if c == nil || !c.stopped.CompareAndSwap(false, true) {
 		return nil
 	}
-	c.statsCollector.RecordConsumerStopped()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.statsCollector.RecordConsumerStopped()
 
 	var errs []error
 	if c.subscription != nil {
@@ -308,6 +321,11 @@ func (c *Consumer) GetSubject() string {
 
 // CreateConsumers creates and starts consumers based on the load test spec and stream configurations
 func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamConsumerManager, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) ([]ConsumerInterface, error) {
+	if loadTestSpec.Consumers.CountPerStream == 0 {
+		logger.Info("Skipping consumer creation as CountPerStream is 0")
+		return nil, nil
+	}
+
 	consumerSliceMu := sync.Mutex{}
 	consumers := make([]ConsumerInterface, 0)
 	failedConsumerStart := atomic.Int32{}
@@ -326,18 +344,20 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 			for subjectIndex, subject := range subjects {
 				for j := int32(0); j < loadTestSpec.Consumers.CountPerStream; j++ {
 					consCfg := ConsumerConfig{
-						ID:              fmt.Sprintf("%s-con-%d-%d-%d", loadTestSpec.ClientIDPrefix, streamIndex+1, subjectIndex, j+1),
-						StreamName:      streamName,
-						DurableName:     fmt.Sprintf("%s_%d_%d_%d", loadTestSpec.Consumers.DurableNamePrefix, streamIndex+1, subjectIndex, j+1),
-						Type:            loadTestSpec.Consumers.Type,
-						AckWaitSeconds:  loadTestSpec.Consumers.AckWaitSeconds,
-						MaxAckPending:   int(loadTestSpec.Consumers.MaxAckPending),
-						ConsumeDelayMs:  loadTestSpec.Consumers.ConsumeDelayMs,
-						AckPolicy:       loadTestSpec.Consumers.AckPolicy,
-						UseJetStream:    loadTestSpec.UseJetStream,
-						Subject:         subject,
-						TrackLatency:    loadTestSpec.Publishers.TrackLatency,
-						PullMaxMessages: int(loadTestSpec.Consumers.PullMaxMessages),
+						ID:                  fmt.Sprintf("%s-con-%d-%d-%d", loadTestSpec.ClientIDPrefix, streamIndex+1, subjectIndex, j+1),
+						StreamName:          streamName,
+						DurableName:         fmt.Sprintf("%s_%d_%d_%d", loadTestSpec.Consumers.DurableNamePrefix, streamIndex+1, subjectIndex, j+1),
+						Type:                loadTestSpec.Consumers.Type,
+						AckWaitSeconds:      loadTestSpec.Consumers.AckWaitSeconds,
+						MaxAckPending:       int(loadTestSpec.Consumers.MaxAckPending),
+						ConsumeDelayMs:      loadTestSpec.Consumers.ConsumeDelayMs,
+						AckPolicy:           loadTestSpec.Consumers.AckPolicy,
+						UseJetStream:        loadTestSpec.UseJetStream,
+						Subject:             subject,
+						TrackLatency:        loadTestSpec.Publishers.TrackLatency,
+						PullMaxMessages:     int(loadTestSpec.Consumers.PullMaxMessages),
+						Start:               loadTestSpec.Consumers.Start,
+						AcknowledgeMessages: loadTestSpec.Consumers.AcknowledgeMessages,
 					}
 
 					consumerStartWaitGroup.Go(func() {
@@ -379,12 +399,18 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamCons
 
 	if failedConsumerStart.Load() > 0 {
 		if len(consumers) == 0 {
-			return nil, fmt.Errorf("all consumers failed to start")
+			return nil, fmt.Errorf("all consumer creation failed")
 		}
-		logger.Warn("Some consumers failed to start", zap.Int32("failed_count", failedConsumerStart.Load()), zap.Int("successful_count", len(consumers)))
+		logger.Warn("Failed to create some consumers", zap.Int32("failed_count", failedConsumerStart.Load()), zap.Int("successful_count", len(consumers)))
+		if !loadTestSpec.Consumers.Start {
+			logger.Warn("Consumers were created but NOT STARTED, as per configuration")
+		}
 		return consumers, nil
 	}
 
-	logger.Info("All consumers started", zap.Int("count", len(consumers)))
+	logger.Info("All consumers created", zap.Int("count", len(consumers)))
+	if !loadTestSpec.Consumers.Start {
+		logger.Warn("Consumers were created but NOT STARTED, as per configuration")
+	}
 	return consumers, nil
 }
