@@ -105,7 +105,7 @@ func (sm *StreamManager) CleanupStreams(cleanupCtx context.Context, loadTestSpec
 	for _, streamSpec := range loadTestSpec.Streams {
 		streamNames := streamSpec.GetFormattedStreamNames()
 		for _, streamName := range streamNames {
-			if err := sm.js.DeleteStream(cleanupCtx, streamName); err != nil && err != jetstream.ErrStreamNotFound {
+			if err := sm.js.DeleteStream(cleanupCtx, streamName); err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
 				return err
 			}
 		}

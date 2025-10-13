@@ -35,6 +35,8 @@ type Collector struct {
 	storage          Storage
 	published        atomic.Uint64
 	consumed         atomic.Uint64
+	lastPublished    uint64
+	lastConsumed     uint64
 	consumerStopped  atomic.Uint64
 	publisherStopped atomic.Uint64
 	publishErrors    atomic.Uint64
@@ -248,9 +250,12 @@ func (c *Collector) CollectStats() *Stats {
 	}
 
 	if duration > 0 {
-		stats.PublishRate = float64(stats.Published) / duration
-		stats.ConsumeRate = float64(stats.Consumed) / duration
+		stats.PublishRate = float64(stats.Published-c.lastPublished) / duration
+		stats.ConsumeRate = float64(stats.Consumed-c.lastConsumed) / duration
 	}
+
+	c.lastPublished = c.published.Load()
+	c.lastConsumed = c.consumed.Load()
 
 	stats.PendingMessages = int64(stats.Published) - int64(stats.Consumed)
 
