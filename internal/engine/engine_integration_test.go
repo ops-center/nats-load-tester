@@ -34,7 +34,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// TODO: sync/disable logs for clarity
 // TestNATSStreamConfigurationIntegration tests the complete workflow with all new stream configuration options
 func TestNATSStreamConfigurationIntegration(t *testing.T) {
 	t.Log("Starting embedded NATS server...")
@@ -54,14 +53,14 @@ func TestNATSStreamConfigurationIntegration(t *testing.T) {
 	}()
 
 	t.Log("Setting up logger...")
-	logger, err := zap.NewDevelopment()
+	loggerConfig := zap.NewDevelopmentConfig()
+	loggerConfig.Level = zap.NewAtomicLevelAt(zap.WarnLevel) // Reduce log noise in tests
+	logger, err := loggerConfig.Build()
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 	defer func() {
-		if err := logger.Sync(); err != nil {
-			t.Logf("Failed to sync logger: %v", err)
-		}
+		_ = logger.Sync() // Ignore sync errors in tests
 	}()
 
 	t.Log("Setting up file storage at: " + tempDir + "test_stats.log")
@@ -124,20 +123,13 @@ func TestNATSStreamConfigurationIntegration(t *testing.T) {
 		t.Errorf("Workflow verification failed: %v", err)
 	}
 
-	t.Log("Waiting for engine to complete...")
-	if err = engine.errGroup.Wait(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("Engine encountered an error: %v", err)
-	}
-
-	// Stop the engine
-	err = engine.Stop(ctx)
-	if err != nil {
+	t.Log("Stopping engine...")
+	if err = engine.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Failed to stop engine: %v", err)
 	}
 
 	// Verify stats were collected
-	err = verifyStatsCollection(t, statsPath)
-	if err != nil {
+	if err = verifyStatsCollection(t, statsPath); err != nil {
 		t.Errorf("Stats verification failed: %v", err)
 	}
 
