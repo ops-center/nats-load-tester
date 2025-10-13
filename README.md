@@ -1,5 +1,7 @@
 # NATS Load Tester
 
+[![CI](https://github.com/ops-center/nats-load-tester/actions/workflows/ci.yml/badge.svg)](https://github.com/ops-center/nats-load-tester/actions/workflows/ci.yml)
+
 NATS JetStream load testing tool for Kubernetes clusters.
 
 ## Kubernetes Deployment
@@ -167,7 +169,7 @@ curl http://service-endpoint:9481/stats?limit=10
 {
   "load_test_specs": [
     {
-      "name": "simple_high_throughput",
+      "name": "Trigger NatsJetStreamConsumerStalled",
       "nats_url": "${NATS_URL}",
       "nats_creds_file": "${NATS_CREDS_MOUNT_PATH}/admin.creds",
       "use_jetstream": true,
@@ -177,49 +179,50 @@ curl http://service-endpoint:9481/stats?limit=10
           "name_prefix": "load_stream",
           "count": 10,
           "replicas": 3,
-          "subjects": ["test.subject.{}"],
+          "subjects": [
+            "test.subject.{}"
+          ],
           "messages_per_stream_per_second": 100000000,
           "retention": "limits",
           "max_age": "5m",
           "storage": "file",
           "discard_new_per_subject": false,
           "discard": "old",
-          "max_msgs": 1000000000,
+          "max_msgs": 10000000000,
           "max_bytes": 299999999,
-          "max_consumers": 10000000,
-          "max_msgs_per_subject": 10000000
+          "max_consumers": 100000000,
+          "max_msgs_per_subject": 100000000
         }
       ],
       "publishers": {
-        "count_per_stream": 50,
+        "count_per_stream": 100,
         "stream_name_prefix": "load_stream",
-        "publish_rate_per_second": 100,
+        "publish_rate_per_second": 500,
         "publish_pattern": "steady",
         "publish_burst_size": 10,
         "message_size_bytes": 1024,
-        "track_latency": true
+        "track_latency": false
       },
       "consumers": {
-        "start": true,
+        "start" : false,
         "stream_name_prefix": "load_stream",
         "type": "push",
-        "count_per_stream": 75,
+        "count_per_stream": 20,
         "durable_name_prefix": "load_consumer",
-        "ack_wait_seconds": 5,
-        "max_ack_pending": -1,
+        "ack_wait_seconds": 10,
+        "max_ack_pending": 1,
         "consume_delay_ms": 0,
         "ack_policy": "explicit",
         "acknowledge_messages": true,
         "pull_max_messages": 100
       },
       "behavior": {
-        "duration_seconds": 60,
-        "ramp_up_seconds": 30
+        "duration_seconds": 1800,
+        "ramp_up_seconds": 180
       },
       "log_limits": {
         "max_lines": 100,
-        "max_bytes": 32768,
-        "max_latency_samples": 10000
+        "max_bytes": 32768
       }
     }
   ],
@@ -247,8 +250,8 @@ curl http://service-endpoint:9481/stats?limit=10
     }
   },
   "storage": {
-    "type": "badger",
-    "path": "/var/lib/lt/load_test_stats.db"
+    "type": "file",
+    "path": "./load_test_stats.log"
   },
   "stats_collection_interval_seconds": 5
 }

@@ -14,13 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-
 # Extract current nats.conf
-kubectl get cm -n ace ace-nats-config -oyaml | yq4 e '.data."nats.conf"' - > nats.conf.tmp
+kubectl get cm -n ace ace-nats-config -oyaml | yq4 e '.data."nats.conf"' - >nats.conf.tmp
 
 # Add cluster configuration
-cat << 'EOF' >> nats.conf.tmp
+cat <<'EOF' >>nats.conf.tmp
 
 ##################
 #                #
@@ -43,7 +41,8 @@ cluster {
 EOF
 
 # Patch the ConfigMap
-kubectl patch cm -n ace ace-nats-config --patch "$(cat << EOF
+kubectl patch cm -n ace ace-nats-config --patch "$(
+    cat <<EOF
 data:
   nats.conf: |
 $(cat nats.conf.tmp | sed 's/^/    /')
