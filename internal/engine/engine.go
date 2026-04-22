@@ -1,38 +1,71 @@
+/*
+Copyright AppsCode Inc. and Contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package engine
 
 import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.opscenter.dev/nats-load-tester/internal/stats"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	engineCleanupTimeout = 5 * time.Minute
+)
+
 type Engine struct {
-	mu                   sync.RWMutex
-	logger               *zap.Logger
-	enablePublishers     bool
-	enableConsumers      bool
-	statsCollector       *stats.Collector
+	mu       sync.RWMutex
+	stopped  atomic.Bool
+	errGroup *errgroup.Group
+	cancel   context.CancelFunc
+
+	logger         *zap.Logger
+	statsCollector *stats.Collector
+
 	natsConn             *nats.Conn
-	natsJetStreamContext nats.JetStreamContext
-	loadTestSpec         *config.LoadTestSpec
-	publishers           []PublisherInterface
-	consumers            []ConsumerInterface
-	cancel               context.CancelFunc
-	errGroup             *errgroup.Group
+	natsJetStreamContext jetstream.JetStream
 	streamManager        StreamManagerInterface
-	rampUpController     RampUpControllerInterface
+
+	loadTestSpec     *config.LoadTestSpec
+	rampUpController RampUpControllerInterface
+
+	enablePublishers bool
+	publishers       []PublisherInterface
+
+	enableConsumers bool
+	consumers       []ConsumerInterface
 }
 
 func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublishers, enableConsumers bool) *Engine {
 	return &Engine{
-		logger:               logger,
+		logger: logger,
+		stopped: *func() *atomic.Bool {
+			b := atomic.Bool{}
+			b.Store(true)
+			return &b
+		}(),
 		statsCollector:       statsCollector,
 		enablePublishers:     enablePublishers,
 		enableConsumers:      enableConsumers,
@@ -43,6 +76,10 @@ func NewEngine(logger *zap.Logger, statsCollector *stats.Collector, enablePublis
 }
 
 func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, statsInterval time.Duration) error {
+	if !e.stopped.CompareAndSwap(true, false) {
+		e.logger.Warn("Start() called, but engine is already running")
+		return nil
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -52,7 +89,9 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 		e.logger.Error("Failed to connect to NATS", zap.Error(err))
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
+	e.logger.Info("Connected to NATS", zap.String("url", e.natsConn.ConnectedUrl()), zap.String("client_id", e.natsConn.Opts.Name))
 
+	e.logger.Info("Setting up collector with load test spec", zap.String("name", loadTestSpec.Name))
 	e.loadTestSpec = loadTestSpec
 	if err := e.statsCollector.SetConfig(loadTestSpec); err != nil {
 		e.logger.Error("Failed to set stats collector config", zap.Error(err))
@@ -65,46 +104,56 @@ func (e *Engine) Start(ctx context.Context, loadTestSpec *config.LoadTestSpec, s
 	e.errGroup, engineCtx = errgroup.WithContext(engineCtx)
 
 	if loadTestSpec.UseJetStream {
+		e.logger.Info("Setting up JetStream stream manager")
 		e.streamManager = NewStreamManager(e.natsJetStreamContext, e.logger)
 	}
+
+	e.logger.Info("Setting up ramp-up controller")
 	e.rampUpController = NewRampUpManager(e.logger, e.statsCollector)
 
-	// Start stats collector in errgroup
+	e.logger.Info("Starting stats collector")
 	e.errGroup.Go(func() error {
 		e.statsCollector.Start(engineCtx, statsInterval)
 		return nil
 	})
 
 	if loadTestSpec.UseJetStream {
+		e.logger.Info("Setting up streams for load test spec", zap.String("name", loadTestSpec.Name))
 		if err := e.streamManager.SetupStreams(engineCtx, loadTestSpec); err != nil {
 			e.logger.Error("Failed to setup streams", zap.Error(err))
-			e.cleanup()
+			e.cleanup(engineCleanupTimeout)
 			return fmt.Errorf("failed to setup streams: %w", err)
 		}
 	}
 
-	if e.enablePublishers {
-		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
-	}
-
 	var err error
 	if e.enableConsumers {
+		e.logger.Info("Creating consumers for load test spec", zap.String("name", loadTestSpec.Name))
 		e.consumers, err = CreateConsumers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
 		if err != nil {
-			e.cleanup()
+			e.cleanup(engineCleanupTimeout)
 			e.logger.Error("Failed to start consumers", zap.Error(err))
 			return fmt.Errorf("failed to start consumers: %w", err)
 		}
 	}
 
+	if e.enablePublishers {
+		e.logger.Info("Creating publishers for load test spec", zap.String("name", loadTestSpec.Name))
+		e.publishers = CreatePublishers(engineCtx, e.natsConn, e.natsJetStreamContext, loadTestSpec, e.statsCollector, e.logger, e.errGroup)
+	}
+
 	e.errGroup.Go(func() error {
+		e.logger.Info("Starting ramp-up process", zap.Duration("duration", loadTestSpec.RampUpDuration()))
 		return e.rampUpController.Start(engineCtx, e.publishers, loadTestSpec.RampUpDuration())
 	})
 
 	return nil
 }
 
-func (e *Engine) Stop() error {
+func (e *Engine) Stop(ctx context.Context) error {
+	if e == nil || !e.stopped.CompareAndSwap(false, true) {
+		return nil
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -119,7 +168,7 @@ func (e *Engine) Stop() error {
 		err = e.errGroup.Wait()
 	}
 
-	e.cleanup()
+	e.cleanup(engineCleanupTimeout)
 
 	return err
 }
@@ -128,7 +177,7 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 	opts := []nats.Option{
 		nats.Name(loadTestSpec.ClientIDPrefix + "-engine"),
 		nats.RetryOnFailedConnect(true),
-		nats.ReconnectBufSize(100 * 1024 * 1024), // 100MB
+		nats.ReconnectBufSize(1 * 1024 * 1024), // 1MB
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
@@ -154,9 +203,11 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 
 	e.natsConn = nc
 
-	/// TODO: migrate to the newer "github.com/nats-io/nats.go/jetstream" api
 	if loadTestSpec.UseJetStream {
-		js, err := nc.JetStream()
+		js, err := jetstream.New(
+			e.natsConn,
+			jetstream.WithPublishAsyncMaxPending(512),
+		)
 		if err != nil {
 			nc.Close()
 			return err
@@ -167,12 +218,20 @@ func (e *Engine) connect(loadTestSpec *config.LoadTestSpec) error {
 	return nil
 }
 
-func (e *Engine) cleanup() {
+func (e *Engine) cleanup(cleanupTimeout time.Duration) {
 	if e.cancel != nil {
 		e.cancel()
 	}
+	// create a new context here as cleanup is usually called when the overlying context is cancelled
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
 
-	// Clean up consumers
+	e.logger.Info("Cleaning up publishers")
+	for _, publisher := range e.publishers {
+		publisher.Cleanup()
+	}
+
+	e.logger.Info("Cleaning up consumers")
 	for _, consumer := range e.consumers {
 		if err := consumer.Cleanup(); err != nil {
 			e.logger.Error("Consumer cleanup failed",
@@ -183,14 +242,25 @@ func (e *Engine) cleanup() {
 		}
 	}
 
-	// Clean up streams if JetStream is enabled
+	e.logger.Info("Cleaning up streams")
 	if e.loadTestSpec != nil && e.loadTestSpec.UseJetStream && e.streamManager != nil {
-		if err := e.streamManager.CleanupStreams(e.loadTestSpec); err != nil {
-			e.logger.Error("Stream cleanup failed", zap.Error(err))
+		if err := exponentialBackoff(cleanupCtx, 1*time.Second, 1.5, 5, 5*time.Second, func() error {
+			return e.streamManager.CleanupStreams(cleanupCtx, e.loadTestSpec)
+		}); err != nil {
+			e.logger.Error("Stream cleanup failed - streams may remain in NATS",
+				zap.Error(err),
+				zap.String("test_name", e.loadTestSpec.Name))
+			e.statsCollector.RecordError(fmt.Errorf("stream cleanup failed: %w", err))
 		}
 	}
 
-	if e.natsConn != nil && e.natsConn.IsConnected() {
+	if e.natsConn != nil {
+		if e.natsConn.IsConnected() {
+			// Drain connection to allow pending messages to complete
+			if err := e.natsConn.Drain(); err != nil {
+				e.logger.Warn("Failed to drain NATS connection", zap.Error(err))
+			}
+		}
 		e.natsConn.Close()
 	}
 
@@ -198,6 +268,8 @@ func (e *Engine) cleanup() {
 	e.natsConn = nil
 	e.loadTestSpec = nil
 	e.streamManager = nil
-	e.publishers = e.publishers[:0]
-	e.consumers = e.consumers[:0]
+	e.rampUpController = nil
+	e.errGroup = nil
+	e.publishers = nil
+	e.consumers = nil
 }
