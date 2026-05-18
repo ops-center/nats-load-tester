@@ -1,3 +1,19 @@
+/*
+Copyright AppsCode Inc. and Contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package main
 
 import (
@@ -18,6 +34,7 @@ type cliArgs struct {
 	logLevel         string
 	useDefaultConfig bool
 	mode             string
+	enablePprof      bool
 }
 
 func main() {
@@ -35,6 +52,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&args.logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().BoolVar(&args.useDefaultConfig, "use-default-config", false, "Load default configuration on startup")
 	rootCmd.PersistentFlags().StringVar(&args.mode, "mode", "both", "Operational mode (publish, consume, both)")
+	rootCmd.PersistentFlags().BoolVar(&args.enablePprof, "enable-pprof", false, "Enable pprof profiling endpoints")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -47,7 +65,6 @@ func run(args *cliArgs) error {
 		return fmt.Errorf("args cannot be nil")
 	}
 
-	// Validate mode argument
 	validModes := map[string]bool{
 		"publish": true,
 		"consume": true,
@@ -73,7 +90,7 @@ func run(args *cliArgs) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	manager := loadtest.NewManager(args.port, args.mode, logger)
+	manager := loadtest.NewManager(args.port, args.mode, args.enablePprof, logger)
 
 	if args.useDefaultConfig {
 		if err := manager.LoadDefaultConfig(args.configFilePath); err != nil {
@@ -81,15 +98,25 @@ func run(args *cliArgs) error {
 		}
 	}
 
-	go func() {
-		if err := manager.Start(ctx); err != nil {
-			logger.Error("manager failed", zap.Error(err))
+	if err := manager.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start manager: %w", err)
+	}
+
+	mgrDoneCh := manager.DoneCh()
+
+	select {
+	case sig := <-sigCh:
+		logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
+		cancel()
+		if err := <-mgrDoneCh; err != nil {
+			logger.Error("Manager shutdown error", zap.Error(err))
 		}
-	}()
-
-	<-sigCh
-	logger.Info("Shutting down...")
-	cancel()
-
-	return nil
+		return nil
+	case err := <-mgrDoneCh:
+		if err != nil {
+			logger.Error("Manager error", zap.Error(err))
+			return err
+		}
+		return nil
+	}
 }

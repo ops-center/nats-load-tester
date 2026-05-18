@@ -1,43 +1,79 @@
+/*
+Copyright AppsCode Inc. and Contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package engine
 
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opscenter.dev/nats-load-tester/internal/config"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	AckRetryInitialDelayMs         = 100
+	AckRetryBackoffFactor          = 2.0
+	AckRetryMaxAttempts            = 4
+	AckRetryMaxDelayMs             = 500
+	ConsumerStartRetryDelaySeconds = 1
+	ConsumerStartRetryFactor       = 2
+	ConsumerStartMaxAttempts       = 5
+	ConsumerStartMaxDelaySeconds   = 5
+)
+
 type ConsumerConfig struct {
-	ID             string
-	StreamName     string
-	DurableName    string
-	Type           string
-	AckWaitSeconds int64
-	MaxAckPending  int
-	ConsumeDelayMs int64
-	AckPolicy      string
-	UseJetStream   bool
-	Subject        string
-	TrackLatency   bool
+	ID                  string
+	StreamName          string
+	DurableName         string
+	Type                string
+	AckWaitSeconds      int64
+	MaxAckPending       int
+	ConsumeDelayMs      int64
+	AckPolicy           string
+	UseJetStream        bool
+	Subject             string
+	TrackLatency        bool
+	PullMaxMessages     int
+	Start               bool
+	AcknowledgeMessages bool
 }
 
 type Consumer struct {
 	mu             sync.Mutex
 	nc             *nats.Conn
-	js             nats.JetStreamContext
+	js             jetstream.StreamConsumerManager
 	config         ConsumerConfig
 	statsCollector statsCollector
 	logger         *zap.Logger
-	subscription   *nats.Subscription
+
+	subscription            *nats.Subscription
+	jetstreamConsumeContext jetstream.ConsumeContext
+	stopped                 atomic.Bool
 }
 
-func NewConsumer(nc *nats.Conn, js nats.JetStreamContext, cfg ConsumerConfig, stats statsCollector, logger *zap.Logger) ConsumerInterface {
+func NewConsumer(nc *nats.Conn, js jetstream.StreamConsumerManager, cfg ConsumerConfig, stats statsCollector, logger *zap.Logger) ConsumerInterface {
 	return &Consumer{
 		nc:             nc,
 		js:             js,
@@ -48,118 +84,106 @@ func NewConsumer(nc *nats.Conn, js nats.JetStreamContext, cfg ConsumerConfig, st
 }
 
 func (c *Consumer) Start(ctx context.Context) error {
-	c.logger.Info("Starting consumer",
-		zap.String("id", c.config.ID),
-		zap.String("stream", c.config.StreamName),
-		zap.String("type", c.config.Type),
-	)
-
 	if c.config.UseJetStream && c.js != nil {
 		return c.startJetStreamConsumer(ctx)
 	}
 
-	return c.startCoreConsumer()
+	return c.startCoreConsumer(ctx)
 }
 
 func (c *Consumer) startJetStreamConsumer(ctx context.Context) error {
-	if err := c.js.DeleteConsumer(c.config.StreamName, c.config.DurableName); err != nil && err != nats.ErrConsumerNotFound {
-		return fmt.Errorf("failed to delete existing consumer: %w", err)
-	}
-
-	ackPolicy := nats.AckExplicitPolicy
+	ackPolicy := jetstream.AckExplicitPolicy
 	switch c.config.AckPolicy {
 	case "none":
-		ackPolicy = nats.AckNonePolicy
+		ackPolicy = jetstream.AckNonePolicy
 	case "all":
-		ackPolicy = nats.AckAllPolicy
+		ackPolicy = jetstream.AckAllPolicy
 	}
 
-	consumerConfig := &nats.ConsumerConfig{
+	consumerConfig := jetstream.ConsumerConfig{
 		Durable:       c.config.DurableName,
 		AckPolicy:     ackPolicy,
 		AckWait:       time.Duration(c.config.AckWaitSeconds) * time.Second,
 		MaxAckPending: c.config.MaxAckPending,
-		DeliverPolicy: nats.DeliverAllPolicy,
+		DeliverPolicy: jetstream.DeliverAllPolicy,
+		FilterSubject: c.config.Subject,
 	}
 
-	// For push consumers, we need to specify a DeliverSubject
-	if c.config.Type == "push" {
-		// Generate a unique delivery subject for this push consumer
-		consumerConfig.DeliverSubject = fmt.Sprintf("_INBOX.%s", c.config.DurableName)
-	}
-
-	_, err := c.js.AddConsumer(c.config.StreamName, consumerConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create consumer: %w", err)
-	}
-
-	if c.config.Type == "pull" {
-		return c.startPullConsumer(ctx)
-	}
-	return c.startPushConsumer()
-}
-
-func (c *Consumer) startPushConsumer() error {
-	msgHandler := func(msg *nats.Msg) {
-		c.handleMessage(msg)
-	}
-
-	sub, err := c.js.Subscribe(
-		c.config.Subject,
-		msgHandler,
-		nats.Durable(c.config.DurableName),
-		nats.ManualAck(),
-		nats.AckWait(time.Duration(c.config.AckWaitSeconds)*time.Second),
-		nats.MaxAckPending(c.config.MaxAckPending),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe: %w", err)
-	}
-
-	c.subscription = sub
-	return nil
-}
-
-func (c *Consumer) startPullConsumer(ctx context.Context) error {
-	sub, err := c.js.PullSubscribe(c.config.Subject, c.config.DurableName,
-		nats.AckWait(time.Duration(c.config.AckWaitSeconds)*time.Second),
-		nats.MaxAckPending(c.config.MaxAckPending),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create pull subscription: %w", err)
-	}
-
-	c.subscription = sub
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				if err := c.Cleanup(); err != nil {
-					c.logger.Error("Failed to cleanup pull consumer", zap.Error(err))
-				}
-				return
-			default:
-				msgs, err := sub.Fetch(10, nats.MaxWait(time.Second))
-				if err != nil && err != nats.ErrTimeout {
-					c.logger.Error("Failed to fetch messages", zap.Error(err))
-					c.statsCollector.RecordConsumeError(err)
-					continue
-				}
-
-				for _, msg := range msgs {
-					c.handleMessage(msg)
-				}
-			}
+	switch c.config.Type {
+	case config.ConsumerTypePush:
+		consumerConfig.DeliverSubject = nats.NewInbox()
+		var pushConsumer jetstream.PushConsumer
+		var err error
+		if pushConsumer, err = c.js.CreateOrUpdatePushConsumer(ctx, c.config.StreamName, consumerConfig); err != nil {
+			c.statsCollector.RecordError(err)
+			return fmt.Errorf("failed to create push consumer: %w", err)
 		}
-	}()
 
-	return nil
+		if !c.config.Start {
+			return nil
+		}
+
+		consumeContext, err := pushConsumer.Consume(
+			func(msg jetstream.Msg) {
+				c.handleNatsJetstreamMessage(ctx, msg)
+			},
+			jetstream.ConsumeErrHandler(func(consumeCtx jetstream.ConsumeContext, err error) {
+				c.logger.Error("Push consumer error",
+					zap.String("id", c.config.ID),
+					zap.String("stream", c.config.StreamName),
+					zap.String("subject", c.config.Subject),
+					zap.Error(err))
+				c.statsCollector.RecordError(err)
+			}),
+		)
+		if err != nil {
+			c.statsCollector.RecordError(err)
+			return fmt.Errorf("failed to start push consumer: %w", err)
+		}
+
+		c.jetstreamConsumeContext = consumeContext
+		return nil
+
+	case config.ConsumerTypePull:
+		pullConsumer, err := c.js.CreateOrUpdateConsumer(ctx, c.config.StreamName, consumerConfig)
+		if err != nil {
+			c.statsCollector.RecordError(err)
+			return fmt.Errorf("failed to create pull consumer: %w", err)
+		}
+
+		if !c.config.Start {
+			return nil
+		}
+
+		consumeContext, err := pullConsumer.Consume(
+			func(msg jetstream.Msg) {
+				c.handleNatsJetstreamMessage(ctx, msg)
+			},
+			jetstream.PullMaxMessages(c.config.PullMaxMessages),
+			jetstream.ConsumeErrHandler(func(consumeCtx jetstream.ConsumeContext, err error) {
+				c.logger.Error("Pull consumer error",
+					zap.String("id", c.config.ID),
+					zap.String("stream", c.config.StreamName),
+					zap.String("subject", c.config.Subject),
+					zap.Error(err))
+				c.statsCollector.RecordError(err)
+			}),
+		)
+		if err != nil {
+			c.statsCollector.RecordError(err)
+			return fmt.Errorf("failed to start pull consumer: %w", err)
+		}
+		c.jetstreamConsumeContext = consumeContext
+		return nil
+
+	default:
+		return fmt.Errorf("invalid consumer type: %s", c.config.Type)
+	}
 }
 
-func (c *Consumer) startCoreConsumer() error {
+func (c *Consumer) startCoreConsumer(ctx context.Context) error {
 	msgHandler := func(msg *nats.Msg) {
-		c.handleMessage(msg)
+		c.handleNatsCoreMessage(ctx, msg)
 	}
 
 	sub, err := c.nc.Subscribe(c.config.Subject, msgHandler)
@@ -171,39 +195,111 @@ func (c *Consumer) startCoreConsumer() error {
 	return nil
 }
 
-func (c *Consumer) handleMessage(msg *nats.Msg) {
-	if c.config.ConsumeDelayMs > 0 {
-		time.Sleep(time.Duration(c.config.ConsumeDelayMs) * time.Millisecond)
+func (c *Consumer) handleNatsCoreMessage(ctx context.Context, msg *nats.Msg) {
+	if c.stopped.Load() {
+		c.logger.Warn("Received nats core message after consumer stopped")
+		return
 	}
 
-	// Only attempt to read timestamp if latency tracking is enabled and message is long enough
-	if c.config.TrackLatency && len(msg.Data) >= 8 {
-		timestamp := binary.LittleEndian.Uint64(msg.Data[:8])
-		latency := time.Since(time.Unix(0, int64(timestamp)))
-		c.statsCollector.RecordLatency(latency)
-	}
-
-	if c.config.UseJetStream && c.config.AckPolicy != "none" {
-		if err := msg.Ack(); err != nil {
-			c.logger.Error("Failed to ack message", zap.Error(err))
-			c.statsCollector.RecordConsumeError(err)
-			return
-		}
-	}
-
+	c.processMessage(ctx, msg.Data)
 	c.statsCollector.RecordConsume()
 }
 
+func (c *Consumer) handleNatsJetstreamMessage(ctx context.Context, msg jetstream.Msg) {
+	if c.stopped.Load() {
+		c.logger.Warn("Received nats jetstream message after consumer stopped")
+		return
+	}
+
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
+	c.processMessage(ctx, msg.Data())
+
+	if c.config.AckPolicy != "none" && c.config.AcknowledgeMessages {
+		if err := exponentialBackoff(
+			ctx,
+			AckRetryInitialDelayMs*time.Millisecond,
+			AckRetryBackoffFactor,
+			AckRetryMaxAttempts,
+			AckRetryMaxDelayMs*time.Millisecond,
+			msg.Ack,
+		); err != nil {
+			c.statsCollector.RecordConsumeError(fmt.Errorf("failed to ACK message: %w", err))
+			if err := msg.Term(); err != nil {
+				c.statsCollector.RecordError(fmt.Errorf("failed to terminate message: %w", err))
+			}
+			return
+		}
+		c.statsCollector.RecordConsume()
+	} else {
+		c.statsCollector.RecordConsume()
+	}
+}
+
+func (c *Consumer) processMessage(ctx context.Context, data []byte) {
+	if c.config.ConsumeDelayMs > 0 {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Duration(c.config.ConsumeDelayMs) * time.Millisecond):
+		}
+	}
+
+	if c.config.TrackLatency && len(data) >= 8 {
+		timestamp := binary.LittleEndian.Uint64(data[:8])
+		latency := time.Since(time.Unix(0, int64(timestamp)))
+		c.statsCollector.RecordLatency(latency)
+	}
+}
+
 func (c *Consumer) Cleanup() error {
+	if c == nil || !c.stopped.CompareAndSwap(false, true) {
+		return nil
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.statsCollector.RecordConsumerStopped()
 
+	var errs []error
 	if c.subscription != nil {
-		// Drain handles both unsubscribe and cleanup
-		if err := c.subscription.Drain(); err != nil {
-			return fmt.Errorf("failed to drain subscription: %w", err)
+		if c.subscription.IsValid() {
+			if err := c.subscription.Drain(); err != nil {
+				c.logger.Warn("Failed to drain subscription, attempting unsubscribe",
+					zap.String("id", c.config.ID),
+					zap.Error(err))
+				if unsubErr := c.subscription.Unsubscribe(); unsubErr != nil {
+					errs = append(errs, fmt.Errorf("failed to unsubscribe: %w", unsubErr))
+				}
+			}
 		}
 		c.subscription = nil
+	}
+
+	if c.jetstreamConsumeContext != nil {
+		c.jetstreamConsumeContext.Stop()
+		c.jetstreamConsumeContext = nil
+	}
+
+	if c.config.UseJetStream && c.js != nil && c.config.DurableName != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := c.js.DeleteConsumer(ctx, c.config.StreamName, c.config.DurableName); err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) {
+			errs = append(errs, fmt.Errorf("failed to delete consumer: %w", err))
+		}
+	}
+
+	c.nc = nil
+	c.js = nil
+	c.statsCollector = nil
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	return nil
 }
@@ -224,9 +320,16 @@ func (c *Consumer) GetSubject() string {
 }
 
 // CreateConsumers creates and starts consumers based on the load test spec and stream configurations
-func CreateConsumers(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) ([]ConsumerInterface, error) {
+func CreateConsumers(ctx context.Context, nc *nats.Conn, js jetstream.StreamConsumerManager, loadTestSpec *config.LoadTestSpec, statsCollector statsCollector, logger *zap.Logger, eg *errgroup.Group) ([]ConsumerInterface, error) {
+	if loadTestSpec.Consumers.CountPerStream == 0 {
+		logger.Info("Skipping consumer creation as CountPerStream is 0")
+		return nil, nil
+	}
+
+	consumerSliceMu := sync.Mutex{}
 	consumers := make([]ConsumerInterface, 0)
-	consumerStartErrGroup := &errgroup.Group{}
+	failedConsumerStart := atomic.Int32{}
+	consumerStartWaitGroup := sync.WaitGroup{}
 
 	for _, streamSpec := range loadTestSpec.Streams {
 		// Only create consumers for streams that match the consumer's stream name prefix
@@ -241,61 +344,73 @@ func CreateConsumers(ctx context.Context, nc *nats.Conn, js nats.JetStreamContex
 			for subjectIndex, subject := range subjects {
 				for j := int32(0); j < loadTestSpec.Consumers.CountPerStream; j++ {
 					consCfg := ConsumerConfig{
-						ID:             fmt.Sprintf("%s-con-%d-%d-%d", loadTestSpec.ClientIDPrefix, streamIndex+1, subjectIndex, j+1),
-						StreamName:     streamName,
-						DurableName:    fmt.Sprintf("%s_%d_%d_%d", loadTestSpec.Consumers.DurableNamePrefix, streamIndex+1, subjectIndex, j+1),
-						Type:           loadTestSpec.Consumers.Type,
-						AckWaitSeconds: loadTestSpec.Consumers.AckWaitSeconds,
-						MaxAckPending:  int(loadTestSpec.Consumers.MaxAckPending),
-						ConsumeDelayMs: loadTestSpec.Consumers.ConsumeDelayMs,
-						AckPolicy:      loadTestSpec.Consumers.AckPolicy,
-						UseJetStream:   loadTestSpec.UseJetStream,
-						Subject:        subject,
-						TrackLatency:   loadTestSpec.Publishers.TrackLatency,
+						ID:                  fmt.Sprintf("%s-con-%d-%d-%d", loadTestSpec.ClientIDPrefix, streamIndex+1, subjectIndex, j+1),
+						StreamName:          streamName,
+						DurableName:         fmt.Sprintf("%s_%d_%d_%d", loadTestSpec.Consumers.DurableNamePrefix, streamIndex+1, subjectIndex, j+1),
+						Type:                loadTestSpec.Consumers.Type,
+						AckWaitSeconds:      loadTestSpec.Consumers.AckWaitSeconds,
+						MaxAckPending:       int(loadTestSpec.Consumers.MaxAckPending),
+						ConsumeDelayMs:      loadTestSpec.Consumers.ConsumeDelayMs,
+						AckPolicy:           loadTestSpec.Consumers.AckPolicy,
+						UseJetStream:        loadTestSpec.UseJetStream,
+						Subject:             subject,
+						TrackLatency:        loadTestSpec.Publishers.TrackLatency,
+						PullMaxMessages:     int(loadTestSpec.Consumers.PullMaxMessages),
+						Start:               loadTestSpec.Consumers.Start,
+						AcknowledgeMessages: loadTestSpec.Consumers.AcknowledgeMessages,
 					}
 
-					consumer := NewConsumer(nc, js, consCfg, statsCollector, logger)
-					consumers = append(consumers, consumer)
+					consumerStartWaitGroup.Go(func() {
+						var consumer ConsumerInterface
 
-					consumerStartErrGroup.Go(func() error {
-						if err := exponentialBackoff(ctx, 1*time.Second, 2, 5, 5*time.Second, func() error {
-							return consumer.Start(ctx)
+						if err := exponentialBackoff(ctx, ConsumerStartRetryDelaySeconds*time.Second, ConsumerStartRetryFactor, ConsumerStartMaxAttempts, ConsumerStartMaxDelaySeconds*time.Second, func() error {
+							consumer = NewConsumer(nc, js, consCfg, statsCollector, logger)
+							if startErr := consumer.Start(ctx); startErr != nil {
+								if err := consumer.Cleanup(); err != nil {
+									return err
+								}
+								return startErr
+							}
+							return nil
 						}); err != nil {
+							failedConsumerStart.Add(1)
 							statsCollector.RecordError(err)
-							logger.Error("consumer failed",
-								zap.String("id", consumer.GetID()),
-								zap.String("stream", consumer.GetStreamName()),
-								zap.String("subject", consumer.GetSubject()),
-								zap.Error(err))
-							return fmt.Errorf("consumer %s failed: %w", consumer.GetID(), err)
+							return
 						}
-						logger.Info("consumer started",
-							zap.String("id", consumer.GetID()),
-							zap.String("stream", consumer.GetStreamName()),
-							zap.String("subject", consumer.GetSubject()))
+
+						consumerSliceMu.Lock()
+						consumers = append(consumers, consumer)
+						consumerSliceMu.Unlock()
+
 						eg.Go(func() error {
 							<-ctx.Done()
 							if consumerErr := consumer.Cleanup(); consumerErr != nil {
-								logger.Error("consumer cleanup failed",
-									zap.String("id", consumer.GetID()),
-									zap.String("stream", consumer.GetStreamName()),
-									zap.String("subject", consumer.GetSubject()),
-									zap.Error(consumerErr))
 								return fmt.Errorf("consumer %s cleanup failed: %w", consumer.GetID(), consumerErr)
 							}
 							return nil
 						})
-						return nil
 					})
 				}
 			}
 		}
 	}
 
-	if err := consumerStartErrGroup.Wait(); err != nil {
-		logger.Error("one or more consumers failed to start", zap.Error(err))
-		return consumers, fmt.Errorf("one or more consumers failed to start: %w", err)
+	consumerStartWaitGroup.Wait()
+
+	if failedConsumerStart.Load() > 0 {
+		if len(consumers) == 0 {
+			return nil, fmt.Errorf("all consumer creation failed")
+		}
+		logger.Warn("Failed to create some consumers", zap.Int32("failed_count", failedConsumerStart.Load()), zap.Int("successful_count", len(consumers)))
+		if !loadTestSpec.Consumers.Start {
+			logger.Warn("Consumers were created but NOT STARTED, as per configuration")
+		}
+		return consumers, nil
 	}
 
+	logger.Info("All consumers created", zap.Int("count", len(consumers)))
+	if !loadTestSpec.Consumers.Start {
+		logger.Warn("Consumers were created but NOT STARTED, as per configuration")
+	}
 	return consumers, nil
 }
